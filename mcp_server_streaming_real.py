@@ -749,13 +749,21 @@ class RealScrapingMCPProtocolServer:
             if request.method == "GET":
                 # GET request için MCP server capabilities döndür
                 return web.json_response({
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "tools": {}
-                    },
-                    "serverInfo": {
-                        "name": "YOK Academic MCP Real Scraping Server",
-                        "version": "3.0.0"
+                    "jsonrpc": "2.0",
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {
+                            "tools": {
+                                "listChanged": False
+                            },
+                            "logging": {},
+                            "experimental": {}
+                        },
+                        "serverInfo": {
+                            "name": "YOK Academic MCP Real Scraping Server",
+                            "version": "3.0.0"
+                        },
+                        "instructions": "YÖK Academic research and collaboration analysis server"
                     }
                 })
             

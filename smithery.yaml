@@ -7,7 +7,7 @@ author: utkucaglar
 
 startCommand:
   type: http
-  url: "http://localhost:8080"
+  url: "http://localhost:8080/mcp"
   configSchema:
     type: object
     properties: {}
