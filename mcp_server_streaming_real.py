@@ -65,21 +65,24 @@ class RealScrapingMCPProtocolServer:
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {
-                        "tools": {},
+                        "tools": {
+                            "listChanged": False
+                        },
                         "logging": {},
                         "experimental": {}
                     },
                     "serverInfo": {
                         "name": "YOK Academic MCP Real Scraping Server",
                         "version": "3.0.0"
-                    }
+                    },
+                    "instructions": "Use this server to search and analyze YÖK Academic profiles and collaborations."
                 }
             }
             
             # Session ID'yi header'a ekle
             resp = web.json_response(response)
             resp.headers['mcp-session-id'] = session_id
-            logger.info(f"✅ Session initialized: {session_id}")
+            logger.info(f"✅ MCP Session initialized: {session_id}")
             return resp
             
         except Exception as e:
@@ -97,18 +100,8 @@ class RealScrapingMCPProtocolServer:
         """MCP tools/list endpoint"""
         try:
             data = await request.json()
-            session_id = request.headers.get('mcp-session-id')
             
-            if not session_id or session_id not in self.sessions:
-                return web.json_response({
-                    "jsonrpc": "2.0",
-                    "id": data.get("id"),
-                    "error": {
-                        "code": -32001,
-                        "message": "Invalid session"
-                    }
-                }, status=400)
-            
+            # Smithery compatibility: Don't require session for tools list
             tools = self.adapter.get_tools()
             
             response = {
@@ -119,14 +112,14 @@ class RealScrapingMCPProtocolServer:
                 }
             }
             
-            logger.info(f"📋 Tools listed for session: {session_id}")
+            logger.info(f"📋 Tools listed for MCP scan")
             return web.json_response(response)
             
         except Exception as e:
             logger.error(f"Tools list error: {e}")
             return web.json_response({
                 "jsonrpc": "2.0",
-                "id": data.get("id"),
+                "id": data.get("id") if 'data' in locals() else None,
                 "error": {
                     "code": -32603,
                     "message": f"Internal error: {str(e)}"
@@ -753,6 +746,19 @@ class RealScrapingMCPProtocolServer:
     async def handle_mcp_request(self, request):
         """Main MCP request handler"""
         try:
+            if request.method == "GET":
+                # GET request için MCP server capabilities döndür
+                return web.json_response({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {}
+                    },
+                    "serverInfo": {
+                        "name": "YOK Academic MCP Real Scraping Server",
+                        "version": "3.0.0"
+                    }
+                })
+            
             data = await request.json()
             method = data.get("method")
             
@@ -884,6 +890,26 @@ def create_app():
     app.router.add_post("/get_collaborators", get_collaborators_handler)
     app.router.add_post("/get_profile", get_profile_handler)
     
+    # Root endpoint for MCP capabilities
+    async def root_handler(request):
+        """Root endpoint showing MCP capabilities"""
+        return web.json_response({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {}
+            },
+            "serverInfo": {
+                "name": "YOK Academic MCP Real Scraping Server",
+                "version": "3.0.0"
+            },
+            "instructions": "This is an MCP (Model Context Protocol) server for YÖK Academic research.",
+            "endpoints": {
+                "mcp": "/mcp",
+                "health": "/health",
+                "tools": ["/search_profile", "/get_session_status", "/get_collaborators", "/get_profile"]
+            }
+        })
+    
     # Health check
     async def health_check_handler(request):
         return web.json_response({
@@ -895,6 +921,7 @@ def create_app():
             "endpoints": ["/mcp", "/search_profile", "/get_session_status", "/get_collaborators", "/get_profile", "/health"]
         })
     
+    app.router.add_get("/", root_handler)
     app.router.add_get("/health", health_check_handler)
     
     return app
