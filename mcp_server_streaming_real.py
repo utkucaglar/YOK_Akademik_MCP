@@ -833,19 +833,26 @@ def create_app():
     """Create web application"""
     # CORS middleware for Smithery compatibility
     async def cors_middleware(request, handler):
-        try:
-            response = await handler(request)
-        except Exception as e:
-            # Handle any unhandled exceptions
-            logger.error(f"Unhandled error: {e}")
-            response = web.json_response({
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {
-                    "code": -32603,
-                    "message": f"Internal error: {str(e)}"
-                }
-            }, status=500)
+        # Handle OPTIONS preflight requests
+        if request.method == 'OPTIONS':
+            response = web.Response(status=200)
+        else:
+            try:
+                response = await handler(request)
+            except web.HTTPException as e:
+                # Re-raise HTTP exceptions (like 404)
+                response = web.Response(status=e.status, text=str(e))
+            except Exception as e:
+                # Handle any unhandled exceptions
+                logger.error(f"Unhandled error: {e}")
+                response = web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32603,
+                        "message": f"Internal error: {str(e)}"
+                    }
+                }, status=500)
         
         # Add CORS headers
         response.headers['Access-Control-Allow-Origin'] = '*'
@@ -856,14 +863,9 @@ def create_app():
     app = web.Application(middlewares=[cors_middleware])
     mcp_server = RealScrapingMCPProtocolServer()
     
-    # OPTIONS handler for CORS preflight
-    async def options_handler(request):
-        return web.Response(status=200)
-    
     # MCP Protocol endpoint
     app.router.add_post("/mcp", mcp_server.handle_mcp_request)
     app.router.add_get("/mcp", mcp_server.handle_mcp_request)
-    app.router.add_options("/mcp", options_handler)
     
     # Smithery tool endpoints
     async def search_profile_handler(request):
@@ -945,7 +947,25 @@ def create_app():
                 "error": str(e)
             }, status=500)
     
+    # MCP Config endpoint for Smithery discovery
+    async def mcp_config_handler(request):
+        """Handle .well-known/mcp-config requests"""
+        return web.json_response({
+            "mcpVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {}
+            },
+            "serverInfo": {
+                "name": "YOK Academic MCP Real Scraping Server",
+                "version": "3.0.0"
+            },
+            "endpoints": {
+                "mcp": "/mcp"
+            }
+        })
+    
     # Add tool endpoints
+    app.router.add_get("/.well-known/mcp-config", mcp_config_handler)
     app.router.add_post("/search_profile", search_profile_handler)
     app.router.add_get("/get_session_status", get_session_status_handler)
     app.router.add_post("/get_collaborators", get_collaborators_handler)
@@ -991,6 +1011,10 @@ if __name__ == "__main__":
     app = create_app()
     # Ortam değişkeninden portu al, yoksa 8080 kullan (Smithery uyumluluğu için)
     port = int(os.environ.get("PORT", 8080))
+    
+    # Debug: PORT environment variable'ını log'la
+    logger.info(f"🐛 PORT env var: {os.environ.get('PORT', 'Not set')}")
+    logger.info(f"🐛 Using port: {port}")
 
     logger.info("=" * 60)
     logger.info("YÖK Akademik Asistanı - MCP Real Scraping Server")
