@@ -774,6 +774,30 @@ class RealScrapingMCPProtocolServer:
                     "id": data.get("id"),
                     "result": {}
                 })
+            elif method == "notifications/initialized":
+                # MCP notification - no response needed for notifications per JSON-RPC spec
+                logger.info("📡 Received notifications/initialized from client")
+                if data.get("id") is not None:
+                    # If there's an ID, it's a request not a notification
+                    return web.json_response({
+                        "jsonrpc": "2.0",
+                        "id": data.get("id"),
+                        "result": {}
+                    })
+                else:
+                    # True notification - no response
+                    return web.Response(status=204)  # No content
+            elif method.startswith("notifications/"):
+                # Handle other notifications
+                logger.info(f"📡 Received notification: {method}")
+                if data.get("id") is not None:
+                    return web.json_response({
+                        "jsonrpc": "2.0", 
+                        "id": data.get("id"),
+                        "result": {}
+                    })
+                else:
+                    return web.Response(status=204)
             else:
                 return web.json_response({
                     "jsonrpc": "2.0",
@@ -784,25 +808,62 @@ class RealScrapingMCPProtocolServer:
                     }
                 }, status=404)
                 
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parse error: {e}")
+            return web.json_response({
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32700,
+                    "message": f"Parse error: {str(e)}"
+                }
+            }, status=400)
         except Exception as e:
             logger.error(f"MCP request error: {e}")
             return web.json_response({
                 "jsonrpc": "2.0",
                 "id": data.get("id") if 'data' in locals() else None,
                 "error": {
-                    "code": -32700,
-                    "message": f"Parse error: {str(e)}"
+                    "code": -32603,
+                    "message": f"Internal error: {str(e)}"
                 }
-            }, status=400)
+            }, status=500)
 
 def create_app():
     """Create web application"""
-    app = web.Application()
+    # CORS middleware for Smithery compatibility
+    async def cors_middleware(request, handler):
+        try:
+            response = await handler(request)
+        except Exception as e:
+            # Handle any unhandled exceptions
+            logger.error(f"Unhandled error: {e}")
+            response = web.json_response({
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {
+                    "code": -32603,
+                    "message": f"Internal error: {str(e)}"
+                }
+            }, status=500)
+        
+        # Add CORS headers
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, mcp-session-id'
+        return response
+    
+    app = web.Application(middlewares=[cors_middleware])
     mcp_server = RealScrapingMCPProtocolServer()
+    
+    # OPTIONS handler for CORS preflight
+    async def options_handler(request):
+        return web.Response(status=200)
     
     # MCP Protocol endpoint
     app.router.add_post("/mcp", mcp_server.handle_mcp_request)
     app.router.add_get("/mcp", mcp_server.handle_mcp_request)
+    app.router.add_options("/mcp", options_handler)
     
     # Smithery tool endpoints
     async def search_profile_handler(request):
