@@ -68,8 +68,7 @@ COPY . .
 # 9. Uygulamanın çalışacağı portu belirt
 EXPOSE 8080
 
-# 10. Gunicorn ile uygulamayı başlat
-# Aiohttp ile uyumlu worker kullan
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--worker-class", "aiohttp.GunicornWebWorker", "--timeout", "120", "mcp_server_streaming_real:create_app()"]
+# 10. Python ile uygulamayı başlat (Gunicorn yerine doğrudan Python kullanımı)
+CMD ["python", "mcp_server_streaming_real.py"]
 
 

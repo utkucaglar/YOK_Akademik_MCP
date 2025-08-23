@@ -29,6 +29,29 @@ class YOKAcademicMCPAdapter:
         self.orchestrator = YOKAcademicAssistant()
         self.active_sessions = {}
     
+    async def search_profile(self, name: str) -> Dict[str, Any]:
+        """Direct search profile method for HTTP endpoints"""
+        return await self._search_profile({"name": name})
+    
+    async def get_collaborators(self, session_id: str) -> Dict[str, Any]:
+        """Direct get collaborators method for HTTP endpoints"""
+        return await self._get_collaborators({"session_id": session_id})
+    
+    async def get_profile(self, profile_url: str) -> Dict[str, Any]:
+        """Direct get profile method for HTTP endpoints"""
+        return await self._get_profile({"profile_url": profile_url})
+    
+    async def get_session_status(self, session_id: str = None) -> Dict[str, Any]:
+        """Direct get session status method for HTTP endpoints"""
+        if session_id:
+            return await self._get_session_status({"session_id": session_id})
+        else:
+            # Return all sessions status
+            return {
+                "active_sessions": len(self.orchestrator.sessions),
+                "sessions": list(self.orchestrator.sessions.keys())
+            }
+    
     def get_tools(self) -> List[Dict[str, Any]]:
         """MCP Inspector için tools listesi"""
         return [

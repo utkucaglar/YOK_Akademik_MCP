@@ -798,6 +798,92 @@ def create_app():
     app.router.add_post("/mcp", mcp_server.handle_mcp_request)
     app.router.add_get("/mcp", mcp_server.handle_mcp_request)
     
+    # Smithery tool endpoints
+    async def search_profile_handler(request):
+        """Handle search_profile tool requests"""
+        try:
+            data = await request.json()
+            name = data.get("name", "")
+            
+            if not name:
+                return web.json_response({
+                    "error": "Name parameter is required"
+                }, status=400)
+            
+            # Delegate to MCP adapter's search functionality
+            result = await mcp_server.adapter.search_profile(name)
+            return web.json_response(result)
+            
+        except Exception as e:
+            logger.error(f"Error in search_profile_handler: {e}")
+            return web.json_response({
+                "error": str(e)
+            }, status=500)
+    
+    async def get_session_status_handler(request):
+        """Handle get_session_status tool requests"""
+        try:
+            # Return current sessions status
+            sessions_info = {
+                "active_sessions": len(mcp_server.sessions),
+                "sessions": list(mcp_server.sessions.keys())
+            }
+            return web.json_response(sessions_info)
+            
+        except Exception as e:
+            logger.error(f"Error in get_session_status_handler: {e}")
+            return web.json_response({
+                "error": str(e)
+            }, status=500)
+    
+    async def get_collaborators_handler(request):
+        """Handle get_collaborators tool requests"""
+        try:
+            data = await request.json()
+            session_id = data.get("session_id", "")
+            
+            if not session_id:
+                return web.json_response({
+                    "error": "session_id parameter is required"
+                }, status=400)
+            
+            # Get collaborators for the session
+            result = await mcp_server.adapter.get_collaborators(session_id)
+            return web.json_response(result)
+            
+        except Exception as e:
+            logger.error(f"Error in get_collaborators_handler: {e}")
+            return web.json_response({
+                "error": str(e)
+            }, status=500)
+    
+    async def get_profile_handler(request):
+        """Handle get_profile tool requests"""
+        try:
+            data = await request.json()
+            profile_url = data.get("profile_url", "")
+            
+            if not profile_url:
+                return web.json_response({
+                    "error": "profile_url parameter is required"
+                }, status=400)
+            
+            # Get profile information
+            result = await mcp_server.adapter.get_profile(profile_url)
+            return web.json_response(result)
+            
+        except Exception as e:
+            logger.error(f"Error in get_profile_handler: {e}")
+            return web.json_response({
+                "error": str(e)
+            }, status=500)
+    
+    # Add tool endpoints
+    app.router.add_post("/search_profile", search_profile_handler)
+    app.router.add_get("/get_session_status", get_session_status_handler)
+    app.router.add_post("/get_collaborators", get_collaborators_handler)
+    app.router.add_post("/get_profile", get_profile_handler)
+    
     # Health check
     async def health_check_handler(request):
         return web.json_response({
@@ -805,7 +891,8 @@ def create_app():
             "service": "YOK Academic MCP Real Scraping Server",
             "version": "3.0.0",
             "protocol": "MCP 2024-11-05",
-            "features": ["Real-time streaming", "Real scraping integration", "Progress updates", "Event-driven responses"]
+            "features": ["Real-time streaming", "Real scraping integration", "Progress updates", "Event-driven responses"],
+            "endpoints": ["/mcp", "/search_profile", "/get_session_status", "/get_collaborators", "/get_profile", "/health"]
         })
     
     app.router.add_get("/health", health_check_handler)
@@ -814,8 +901,8 @@ def create_app():
 
 if __name__ == "__main__":
     app = create_app()
-    # Ortam değişkeninden portu al, yoksa 5000 kullan
-    port = int(os.environ.get("PORT", 5000))
+    # Ortam değişkeninden portu al, yoksa 8080 kullan (Smithery uyumluluğu için)
+    port = int(os.environ.get("PORT", 8080))
 
     logger.info("=" * 60)
     logger.info("YÖK Akademik Asistanı - MCP Real Scraping Server")

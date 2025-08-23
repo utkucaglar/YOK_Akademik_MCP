@@ -7,28 +7,11 @@ author: utkucaglar
 
 startCommand:
   type: http
+  url: "http://localhost:8080/mcp"
   configSchema:
-    # Bu MCP için kullanıcı tarafından sağlanacak yapılandırma seçenekleri.
-    # Mevcut durumda, bu proje kullanıcıdan özel bir yapılandırma almamaktadır.
     type: object
-    properties: {} # Kullanıcı tarafından yapılandırılabilir özellik yok.
-    additionalProperties: false # Başka özelliklere izin verme.
-
-
-
-commandFunction: |
-  (config) => ({
-    command: 'sh', // Komutu çalıştırmak için kabuğu kullanıyoruz.
-    args: [
-      '-c',
-      // Çalıştırılacak olan asıl Gunicorn komutu:
-      'gunicorn --bind 0.0.0.0:8080 --worker-class aiohttp.GunicornWebWorker --timeout 120 mcp_server_streaming_real:create_app()'
-    ],
-    env: {
-      PYTHONUNBUFFERED: "1" // Python için arabelleksiz çıktıyı etkinleştirir.
-      // Gelecekte başka sabit ortam değişkenleri gerekirse buraya eklenebilir.
-    }
-  })
+    properties: {}
+    additionalProperties: false
    
 
 tools:
