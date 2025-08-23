@@ -1,0 +1,84 @@
+name: yok-akademik-mcp
+description: YÖK Akademik Asistanı - MCP Server
+version: 3.0.0
+author: utkucaglar
+
+
+
+startCommand:
+  type: http
+  configSchema:
+    # Bu MCP için kullanıcı tarafından sağlanacak yapılandırma seçenekleri.
+    # Mevcut durumda, bu proje kullanıcıdan özel bir yapılandırma almamaktadır.
+    type: object
+    properties: {} # Kullanıcı tarafından yapılandırılabilir özellik yok.
+    additionalProperties: false # Başka özelliklere izin verme.
+
+
+
+commandFunction: |
+  (config) => ({
+    command: 'sh', // Komutu çalıştırmak için kabuğu kullanıyoruz.
+    args: [
+      '-c',
+      // Çalıştırılacak olan asıl Gunicorn komutu:
+      'gunicorn --bind 0.0.0.0:8080 --worker-class aiohttp.GunicornWebWorker --timeout 120 mcp_server_streaming_real:create_app()'
+    ],
+    env: {
+      PYTHONUNBUFFERED: "1" // Python için arabelleksiz çıktıyı etkinleştirir.
+      // Gelecekte başka sabit ortam değişkenleri gerekirse buraya eklenebilir.
+    }
+  })
+   
+
+tools:
+  # 1. search_profile: Bu aracın detayları ekran görüntüsünde mevcut.
+  - name: "search_profile"
+    description: "YÖK Akademik platformunda akademisyen profili ara ve işbirliklerini tara"
+    path: "/search_profile" # BU YOLU KODUNUZDAN TEYİT EDİN!
+    method: "POST"
+    schema:
+      type: object
+      properties:
+        name:
+          type: string
+          description: "Aranacak akademisyenin adı"
+      required:
+        - "name"
+
+  # 2. get_session_status: Bu araç için bir şablon.
+  - name: "get_session_status"
+    description: "Aktif session'ın durumunu kontrol et." # Kendi tanımınızla güncelleyin.
+    path: "/get_session_status" # BU YOLU KODUNUZDAN TEYİT EDİN!
+    method: "GET" # Genellikle durum kontrolü GET ile yapılır, POST ise değiştirin.
+    schema: # Bu araç herhangi bir parametre almıyorsa, properties boş kalabilir.
+      type: object
+      properties: {}
+
+  # 3. get_collaborators: Bu araç için bir şablon.
+  - name: "get_collaborators"
+    description: "Belirtilen session için işbirlikçi taraması başlat." # Kendi tanımınızla güncelleyin.
+    path: "/get_collaborators" # BU YOLU KODUNUZDAN TEYİT EDİN!
+    method: "POST"
+    schema:
+      type: object
+      properties:
+        session_id: # Örnek bir parametre, siz kendi kodunuza göre düzenleyin.
+          type: string
+          description: "İşbirlikçileri taranacak olan oturumun kimliği."
+      required:
+        - "session_id" # Eğer bu parametre zorunlu ise.
+
+  # 4. get_profile: Bu araç için bir şablon.
+  - name: "get_profile"
+    description: "Main profile scraping sonrası hangi profilin işbirliklerinin taranacağını seç." # Kendi tanımınızla güncelleyin.
+    path: "/get_profile" # BU YOLU KODUNUZDAN TEYİT EDİN!
+    method: "POST"
+    schema:
+      type: object
+      properties:
+        profile_url: # Örnek bir parametre, siz kendi kodunuza göre düzenleyin.
+          type: string
+          description: "İşbirlikleri taranacak olan profilin YÖK Akademik URL'si."
+      required:
+        - "profile_url" # Eğer bu parametre zorunlu ise.

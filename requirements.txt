@@ -1,0 +1,8 @@
+aiohttp==3.9.1
+selenium==4.15.2
+webdriver-manager==4.0.1
+requests==2.31.0
+watchdog==3.0.0
+pathlib2==2.3.7
+gunicorn==22.0.0
+
