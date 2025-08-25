@@ -204,67 +204,20 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
         print(f"[{self.address_string()}] {format % args}")
 
 def run_server():
-    """Run the HTTP server with robust startup"""
+    """Run the HTTP server - ultra simple version"""
     port = int(os.environ.get('PORT', 8080))
     
-    print("=" * 50)
-    print("🚀 Minimal YÖK Academic MCP Server")
-    print("=" * 50)
+    print("YOK Academic MCP Server starting...")
     print(f"Port: {port}")
-    print(f"Health: http://0.0.0.0:{port}/health")
-    print(f"MCP: http://0.0.0.0:{port}/mcp")
     print(f"Tools: {len(TOOLS)}")
-    print("=" * 50)
-    
-    # Test basic functionality first
-    print("🔍 Testing tools...")
-    for tool in TOOLS:
-        test_result = execute_tool(tool['name'], {})
-        print(f"  ✅ {tool['name']}: {test_result.get('status', 'unknown')}")
-    
-    # Create server with timeout settings
-    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
-    server.timeout = 30  # 30 second timeout
     
     try:
-        print(f"✅ Server binding to 0.0.0.0:{port}...")
-        
-        # Test if port is available
-        import socket
-        test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        test_socket.settimeout(5)
-        result = test_socket.connect_ex(('0.0.0.0', port))
-        test_socket.close()
-        
-        if result == 0:
-            print(f"⚠️  Port {port} appears to be in use, trying anyway...")
-        else:
-            print(f"✅ Port {port} is available")
-        
-        print(f"🚀 Server starting on 0.0.0.0:{port}...")
-        print("📡 Ready to accept connections...")
-        
-        # Start server
+        server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+        print(f"Server ready on 0.0.0.0:{port}")
         server.serve_forever()
-        
-    except OSError as e:
-        print(f"❌ Port binding error: {e}")
-        print(f"💡 Trying alternative port...")
-        
-        # Try alternative port
-        alt_port = port + 1
-        server = HTTPServer(('0.0.0.0', alt_port), SimpleHTTPRequestHandler)
-        print(f"🔄 Retrying on port {alt_port}...")
-        server.serve_forever()
-        
-    except KeyboardInterrupt:
-        print("\n⏹️  Server stopped gracefully")
-        server.server_close()
         
     except Exception as e:
-        print(f"❌ Server error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Server error: {e}")
         sys.exit(1)
 
 if __name__ == '__main__':

@@ -31,13 +31,10 @@ EXPOSE 8080
 # 9. Comprehensive test ve minimal server'ı başlat
 RUN python -c "print('✅ Python test successful'); import http.server; print('✅ HTTP server import successful'); import json; print('✅ JSON import successful'); import socket; print('✅ Socket import successful'); print('🎉 All imports successful')"
 
-# 10. Test server script functionality
-RUN python -c "import sys; sys.path.append('.'); from minimal_server import execute_tool, TOOLS; result = execute_tool('search_profile', {'name': 'test'}); print(f'✅ Tool test: {result.get(\"status\", \"unknown\")}'); print(f'✅ Available tools: {len(TOOLS)}')"
+# 10. Test ultra-simple server functionality
+RUN python -c "import ultra_simple; print('✅ Ultra-simple server imported successfully')"
 
-# 11. Make start script executable and use it
-RUN chmod +x start.sh
-
-# 12. Start with comprehensive launch script
-CMD ["./start.sh"]
+# 11. Ultra-simple server - single file, no complexity
+CMD ["python", "-u", "ultra_simple.py"]
 
 
