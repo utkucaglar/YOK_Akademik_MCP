@@ -34,6 +34,7 @@ logs/
 test_*
 *_test.py
 tests/
+health_check.py
 
 # Development
 .env*

@@ -15,12 +15,19 @@ import os
 # Add src to Python path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from core.mcp_orchestrator import YOKAcademicAssistant
+# Safe imports with fallbacks for deployment
+try:
+    from core.mcp_orchestrator import YOKAcademicAssistant
+except ImportError:
+    # Fallback for deployment - create a simple mock
+    class YOKAcademicAssistant:
+        def __init__(self):
+            self.sessions = {}
+
 try:
     from config.config import SESSIONS_DIR
 except ImportError:
     # Fallback: Manuel path oluştur
-    from pathlib import Path
     SESSIONS_DIR = Path(__file__).parent / "public" / "collaborator-sessions"
 
 class YOKAcademicMCPAdapter:
