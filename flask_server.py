@@ -144,9 +144,15 @@ def root():
         "protocol": "MCP 2024-11-05",
         "endpoints": {
             "mcp": "/mcp",
-            "health": "/health"
+            "health": "/health",
+            "tools": {
+                "search_profile": "/search_profile",
+                "get_session_status": "/get_session_status", 
+                "get_collaborators": "/get_collaborators",
+                "get_profile": "/get_profile"
+            }
         },
-        "tools": len(tools_data)
+        "tools_count": len(tools_data)
     })
 
 @app.route('/mcp', methods=['GET', 'POST'])
@@ -271,6 +277,65 @@ def handle_mcp():
             }
         }), 500
 
+# Smithery tool endpoints
+@app.route('/search_profile', methods=['POST'])
+def search_profile_endpoint():
+    """Direct tool endpoint for search_profile"""
+    try:
+        data = request.get_json()
+        name = data.get('name', '') if data else ''
+        
+        if not name:
+            return jsonify({'error': 'Name parameter is required'}), 400
+        
+        result = execute_tool('search_profile', {'name': name})
+        return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_session_status', methods=['GET'])
+def get_session_status_endpoint():
+    """Direct tool endpoint for get_session_status"""
+    try:
+        result = execute_tool('get_session_status', {})
+        return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_collaborators', methods=['POST'])
+def get_collaborators_endpoint():
+    """Direct tool endpoint for get_collaborators"""
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id', '') if data else ''
+        
+        if not session_id:
+            return jsonify({'error': 'session_id parameter is required'}), 400
+        
+        result = execute_tool('get_collaborators', {'session_id': session_id})
+        return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_profile', methods=['POST'])
+def get_profile_endpoint():
+    """Direct tool endpoint for get_profile"""
+    try:
+        data = request.get_json()
+        profile_url = data.get('profile_url', '') if data else ''
+        
+        if not profile_url:
+            return jsonify({'error': 'profile_url parameter is required'}), 400
+        
+        result = execute_tool('get_profile', {'profile_url': profile_url})
+        return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     try:
         port = int(os.environ.get('PORT', 8080))
@@ -280,6 +345,11 @@ if __name__ == '__main__':
         test_result = execute_tool("search_profile", {"name": "test"})
         print(f"✅ Tool test result: {test_result.get('status', 'unknown')}")
         
+        # Test all tools
+        for tool in tools_data:
+            tool_name = tool['name']
+            print(f"📋 Tool available: {tool_name}")
+        
         print("=" * 50)
         print("🚀 YOK Academic MCP Server Starting (Flask)")
         print("=" * 50)
@@ -287,6 +357,11 @@ if __name__ == '__main__':
         print(f"Health: http://0.0.0.0:{port}/health")
         print(f"MCP: http://0.0.0.0:{port}/mcp")
         print(f"Tools: {len(tools_data)}")
+        print("Direct endpoints:")
+        print(f"  • POST /search_profile")
+        print(f"  • GET  /get_session_status") 
+        print(f"  • POST /get_collaborators")
+        print(f"  • POST /get_profile")
         print("=" * 50)
         
         # Run Flask server
