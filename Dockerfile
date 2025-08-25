@@ -28,8 +28,8 @@ RUN mkdir -p public/collaborator-sessions
 # 8. Uygulamanın çalışacağı portu belirt
 EXPOSE 8080
 
-# 9. Test ve Flask server'ı başlat
-RUN python -c "print('Python test successful'); import flask; print('Flask import successful')"
-CMD ["python", "flask_server.py"]
+# 9. Test ve minimal server'ı başlat
+RUN python -c "print('Python test successful'); import http.server; print('HTTP server import successful')"
+CMD ["python", "minimal_server.py"]
 
 
