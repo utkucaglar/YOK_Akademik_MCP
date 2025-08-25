@@ -28,8 +28,16 @@ RUN mkdir -p public/collaborator-sessions
 # 8. Uygulamanın çalışacağı portu belirt
 EXPOSE 8080
 
-# 9. Test ve minimal server'ı başlat
-RUN python -c "print('Python test successful'); import http.server; print('HTTP server import successful')"
-CMD ["python", "minimal_server.py"]
+# 9. Comprehensive test ve minimal server'ı başlat
+RUN python -c "print('✅ Python test successful'); import http.server; print('✅ HTTP server import successful'); import json; print('✅ JSON import successful'); import socket; print('✅ Socket import successful'); print('🎉 All imports successful')"
+
+# 10. Test server script functionality
+RUN python -c "import sys; sys.path.append('.'); from minimal_server import execute_tool, TOOLS; result = execute_tool('search_profile', {'name': 'test'}); print(f'✅ Tool test: {result.get(\"status\", \"unknown\")}'); print(f'✅ Available tools: {len(TOOLS)}')"
+
+# 11. Make start script executable and use it
+RUN chmod +x start.sh
+
+# 12. Start with comprehensive launch script
+CMD ["./start.sh"]
 
 
