@@ -36,6 +36,11 @@ test_*
 tests/
 health_check.py
 
+# Complex server files (use simple_server.py instead)
+mcp_server_streaming_real.py
+mcp_adapter.py
+src/
+
 # Development
 .env*
 

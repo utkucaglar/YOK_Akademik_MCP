@@ -28,7 +28,7 @@ RUN mkdir -p public/collaborator-sessions
 # 8. Uygulamanın çalışacağı portu belirt
 EXPOSE 8080
 
-# 9. Python ile uygulamayı başlat
-CMD ["python", "mcp_server_streaming_real.py"]
+# 9. Python ile basit server'ı başlat
+CMD ["python", "simple_server.py"]
 
 
