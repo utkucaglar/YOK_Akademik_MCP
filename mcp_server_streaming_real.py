@@ -19,7 +19,12 @@ import logging
 # Add src to Python path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from mcp_adapter import YOKAcademicMCPAdapter
+# Safe import of MCP adapter
+try:
+    from mcp_adapter import YOKAcademicMCPAdapter
+except ImportError as e:
+    logger.warning(f"Could not import MCP adapter: {e}")
+    YOKAcademicMCPAdapter = None
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -33,9 +38,78 @@ class RealScrapingMCPProtocolServer:
     
     def __init__(self):
         self.sessions = {}
-        self.adapter = YOKAcademicMCPAdapter()
         self.streaming_tasks = {}  # Track active streaming tasks
         self.base_dir = Path(__file__).parent
+        
+        # Initialize adapter with error handling
+        try:
+            if YOKAcademicMCPAdapter:
+                self.adapter = YOKAcademicMCPAdapter()
+            else:
+                self.adapter = None
+        except Exception as e:
+            logger.error(f"Failed to initialize MCP adapter: {e}")
+            self.adapter = None
+    
+    def _get_fallback_tools(self):
+        """Get fallback tools list when adapter is not available"""
+        return [
+            {
+                "name": "search_profile",
+                "description": "YÖK Akademik platformunda akademisyen profili ara",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Aranacak akademisyenin adı"
+                        }
+                    },
+                    "required": ["name"]
+                }
+            },
+            {
+                "name": "get_session_status",
+                "description": "Aktif session durumunu kontrol et",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            },
+            {
+                "name": "get_collaborators",
+                "description": "Belirtilen session için işbirlikçi tarama başlat",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {
+                            "type": "string",
+                            "description": "Session ID"
+                        }
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "get_profile",
+                "description": "Profil seç ve işbirlikçi tarama başlat",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {
+                            "type": "string",
+                            "description": "Session ID"
+                        },
+                        "profile_id": {
+                            "type": "integer",
+                            "description": "Profil ID"
+                        }
+                    },
+                    "required": ["session_id", "profile_id"]
+                }
+            }
+        ]
         
     def generate_session_id(self):
         """Generate a readable and sortable session ID"""
@@ -99,10 +173,24 @@ class RealScrapingMCPProtocolServer:
     async def handle_tools_list(self, request):
         """MCP tools/list endpoint"""
         try:
-            data = await request.json()
+            # Handle both JSON and GET requests for Smithery compatibility
+            if request.method == 'GET':
+                data = {}
+            else:
+                try:
+                    data = await request.json()
+                except Exception:
+                    data = {}
             
             # Smithery compatibility: Don't require session for tools list
-            tools = self.adapter.get_tools()
+            if self.adapter:
+                try:
+                    tools = self.adapter.get_tools()
+                except Exception as adapter_error:
+                    logger.error(f"Adapter error: {adapter_error}")
+                    tools = self._get_fallback_tools()
+            else:
+                tools = self._get_fallback_tools()
             
             response = {
                 "jsonrpc": "2.0",
@@ -216,11 +304,24 @@ class RealScrapingMCPProtocolServer:
     async def handle_immediate_tool_call(self, request, tool_name: str, arguments: Dict, session_id: str):
         """Handle immediate tool calls with direct response"""
         try:
+            # Get request data once
+            request_data = await request.json()
+            
+            if not self.adapter:
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": request_data.get("id"),
+                    "error": {
+                        "code": -32603,
+                        "message": "MCP adapter not available"
+                    }
+                }, status=500)
+            
             result = await self.adapter.execute_tool(tool_name, arguments)
             
             response = {
                 "jsonrpc": "2.0",
-                "id": request.json().get("id"),
+                "id": request_data.get("id"),
                 "result": result
             }
             
@@ -231,7 +332,7 @@ class RealScrapingMCPProtocolServer:
             logger.error(f"Tool execution error: {e}")
             return web.json_response({
                 "jsonrpc": "2.0",
-                "id": request.json().get("id"),
+                "id": None,
                 "error": {
                     "code": -32603,
                     "message": f"Tool execution failed: {str(e)}"
@@ -891,7 +992,13 @@ def create_app():
                 }, status=400)
             
             # Delegate to MCP adapter's search functionality
-            result = await mcp_server.adapter.search_profile(name)
+            if mcp_server.adapter:
+                result = await mcp_server.adapter.search_profile(name)
+            else:
+                result = {
+                    "error": "MCP adapter not available",
+                    "status": "failed"
+                }
             return web.json_response(result)
             
         except Exception as e:
@@ -904,10 +1011,17 @@ def create_app():
         """Handle get_session_status tool requests"""
         try:
             # Return current sessions status
-            sessions_info = {
-                "active_sessions": len(mcp_server.sessions),
-                "sessions": list(mcp_server.sessions.keys())
-            }
+            if mcp_server.adapter:
+                sessions_info = {
+                    "active_sessions": len(mcp_server.sessions),
+                    "sessions": list(mcp_server.sessions.keys())
+                }
+            else:
+                sessions_info = {
+                    "active_sessions": len(mcp_server.sessions),
+                    "sessions": list(mcp_server.sessions.keys()),
+                    "warning": "MCP adapter not available"
+                }
             return web.json_response(sessions_info)
             
         except Exception as e:
@@ -1013,8 +1127,21 @@ def create_app():
             "endpoints": ["/mcp", "/search_profile", "/get_session_status", "/get_collaborators", "/get_profile", "/health"]
         })
     
+    # Test endpoint for debugging
+    async def test_handler(request):
+        return web.json_response({
+            "status": "ok",
+            "adapter_available": mcp_server.adapter is not None,
+            "server_info": {
+                "name": "YOK Academic MCP Real Scraping Server",
+                "version": "3.0.0"
+            },
+            "test_message": "Server is running and responding"
+        })
+    
     app.router.add_get("/", root_handler)
     app.router.add_get("/health", health_check_handler)
+    app.router.add_get("/test", test_handler)
     
     return app
 
