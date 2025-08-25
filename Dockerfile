@@ -69,6 +69,6 @@ COPY . .
 EXPOSE 8080
 
 # 10. Python ile uygulamayı başlat (Gunicorn yerine doğrudan Python kullanımı)
-CMD ["python", "simple_mcp_server.py"]
+CMD ["python", "mcp_server_streaming_real.py"]
 
 
