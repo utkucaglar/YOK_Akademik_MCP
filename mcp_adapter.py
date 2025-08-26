@@ -93,7 +93,7 @@ class YOKAcademicMCPAdapter:
                 "inputSchema": {
                     "type": "object",
                     "properties": {},
-                    "additionalProperties": false
+                    "additionalProperties": False
                 }
             },
             {

@@ -36,16 +36,6 @@ test_*
 tests/
 health_check.py
 
-# Complex server files (use ultra_simple.py instead)
-mcp_server_streaming_real.py
-mcp_adapter.py
-simple_server.py
-flask_server.py
-minimal_server.py
-wsgi_server.py
-start.sh
-src/
-
 # Development
 .env*
 

@@ -16,7 +16,7 @@ startCommand:
 
 tools:
   - name: "search_profile"
-    description: "YÖK Akademik platformunda akademisyen profili ara"
+    description: "YÖK Akademik platformunda akademisyen profili ara ve işbirliklerini tara"
     path: "/search_profile"
     method: "POST"
     schema:
@@ -36,3 +36,29 @@ tools:
       type: object
       properties: {}
       additionalProperties: false
+
+  - name: "get_collaborators"
+    description: "Belirtilen session için işbirlikçi taraması başlat"
+    path: "/get_collaborators"
+    method: "POST"
+    schema:
+      type: object
+      properties:
+        session_id:
+          type: string
+          description: "İşbirlikçileri taranacak olan oturumun kimliği"
+      required:
+        - "session_id"
+
+  - name: "get_profile"
+    description: "Main profile scraping sonrası hangi profilin işbirliklerinin taranacağını seç"
+    path: "/get_profile"
+    method: "POST"
+    schema:
+      type: object
+      properties:
+        profile_url:
+          type: string
+          description: "İşbirlikleri taranacak olan profilin YÖK Akademik URL'si"
+      required:
+        - "profile_url"

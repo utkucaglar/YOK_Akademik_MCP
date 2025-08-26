@@ -28,13 +28,7 @@ RUN mkdir -p public/collaborator-sessions
 # 8. Uygulamanın çalışacağı portu belirt
 EXPOSE 8080
 
-# 9. Comprehensive test ve minimal server'ı başlat
-RUN python -c "print('✅ Python test successful'); import http.server; print('✅ HTTP server import successful'); import json; print('✅ JSON import successful'); import socket; print('✅ Socket import successful'); print('🎉 All imports successful')"
-
-# 10. Test ultra-simple server functionality
-RUN python -c "import ultra_simple; print('✅ Ultra-simple server imported successfully')"
-
-# 11. Ultra-simple server - single file, no complexity
-CMD ["python", "-u", "ultra_simple.py"]
+# 9. Python ile uygulamayı başlat
+CMD ["python", "mcp_server_streaming_real.py"]
 
 
