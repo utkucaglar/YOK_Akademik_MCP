@@ -121,10 +121,34 @@ prefs = {
 }
 options.add_experimental_option("prefs", prefs)
 
-# Set Chrome binary path from environment
-chrome_bin = os.getenv("CHROME_BIN", "/usr/bin/chromium")
-if chrome_bin:
+# Set Chrome binary path from environment or auto-detect
+chrome_bin = os.getenv("CHROME_BIN")
+
+# Windows için Chrome binary otomatik tespiti
+if not chrome_bin:
+    possible_paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        r"C:\Users\{}\AppData\Local\Google\Chrome\Application\chrome.exe".format(os.getenv("USERNAME", "")),
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser"
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            chrome_bin = path
+            print(f"[DEBUG] Chrome binary found at: {chrome_bin}", flush=True)
+            break
+    
+    if not chrome_bin:
+        print("[WARNING] Chrome binary not found, using webdriver-manager default", flush=True)
+
+if chrome_bin and os.path.exists(chrome_bin):
     options.binary_location = chrome_bin
+    print(f"[DEBUG] Using Chrome binary: {chrome_bin}", flush=True)
+else:
+    print("[DEBUG] Using webdriver-manager auto-detected Chrome", flush=True)
 
 print("[DEBUG] WebDriver başlatılıyor...", flush=True)
 driver = webdriver.Chrome(

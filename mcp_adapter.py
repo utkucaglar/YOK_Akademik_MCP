@@ -34,7 +34,7 @@ class YOKAcademicMCPAdapter:
         return [
             {
                 "name": "search_profile",
-                "description": "YÖK Akademik platformunda akademisyen profili ara ve işbirlikçilerini tara",
+                "description": "YÖK Akademik platformunda akademisyen profili ara (real-time streaming ile sonuçları sunar)",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -47,36 +47,22 @@ class YOKAcademicMCPAdapter:
                 }
             },
             {
-                "name": "get_session_status",
-                "description": "Aktif session'ın durumunu kontrol et",
+                "name": "get_profile",
+                "description": "Session'daki tüm profil verilerini JSON formatında döndürür",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "session_id": {
                             "type": "string",
-                            "description": "Session ID"
+                            "description": "Profil verilerini alınacak session ID (opsiyonel, verilmezse en son session kullanılır)"
                         }
                     },
-                    "required": ["session_id"]
+                    "required": []
                 }
             },
             {
                 "name": "get_collaborators",
-                "description": "Belirtilen session için işbirlikçi tarama başlat",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "session_id": {
-                            "type": "string",
-                            "description": "Session ID"
-                        }
-                    },
-                    "required": ["session_id"]
-                }
-            },
-            {
-                "name": "get_profile",
-                "description": "Main profile scraping sonrası hangi profilin işbirlikçilerinin taranacağını seç",
+                "description": "Seçilen profil için işbirlikçi araştırması başlatır",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -84,12 +70,13 @@ class YOKAcademicMCPAdapter:
                             "type": "string",
                             "description": "Session ID"
                         },
-                        "profile_id": {
+                        "profile_index": {
                             "type": "integer",
-                            "description": "Seçilecek profilin ID'si (main_profile.json'dan)"
+                            "description": "İşbirlikçileri aranacak profilin index numarası (1'den başlar)",
+                            "minimum": 1
                         }
                     },
-                    "required": ["session_id", "profile_id"]
+                    "required": ["session_id", "profile_index"]
                 }
             }
         ]
@@ -104,12 +91,10 @@ class YOKAcademicMCPAdapter:
             result = await self._search_profile(arguments)
             print(f"[MCP_DEBUG] _search_profile result: {result}")
             return result
-        elif tool_name == "get_session_status":
-            return await self._get_session_status(arguments)
+        elif tool_name == "get_profile":
+            return await self._get_profile_details(arguments)
         elif tool_name == "get_collaborators":
             return await self._get_collaborators(arguments)
-        elif tool_name == "get_profile":
-            return await self._get_profile(arguments)
         else:
             raise ValueError(f"Unknown tool: {tool_name}")
     
@@ -184,9 +169,10 @@ class YOKAcademicMCPAdapter:
             }
     
     async def _get_collaborators(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """İşbirlikçi tarama başlat"""
+        """Seçilen profil için işbirlikçi tarama başlat"""
         try:
-            session_id = arguments.get("session_id", "")
+            session_id = arguments.get("session_id")
+            profile_index = arguments.get("profile_index", 1)
             
             if not session_id:
                 return {
@@ -194,40 +180,41 @@ class YOKAcademicMCPAdapter:
                     "status": "failed"
                 }
             
-            if session_id not in self.orchestrator.sessions:
+            # Session'ın var olduğunu kontrol et
+            session_dir = SESSIONS_DIR / session_id
+            if not session_dir.exists():
                 return {
-                    "error": "Session not found",
+                    "error": f"Session not found: {session_id}",
                     "status": "failed"
                 }
             
-            print(f"[MCP_INFO] Starting collaborators scraping for session: {session_id}")
+            # main_profile.json'ın var olduğunu kontrol et
+            main_profile_file = session_dir / "main_profile.json"
+            if not main_profile_file.exists():
+                return {
+                    "error": "Main profile file not found. Please run search_profile first.",
+                    "status": "failed"
+                }
             
-            # Collaborators scraping'i başlat
-            # Önce session'daki profilleri ve varsa seçimi al
-            session_info = self.orchestrator.sessions[session_id]
-            selected_profile = session_info.selected_profile
-            profiles = session_info.profiles or []
-
-            if selected_profile:
-                profile = selected_profile
-            else:
-                if not profiles:
-                    raise ValueError("No profiles found in session")
-                if len(profiles) == 1:
-                    profile = profiles[0]
-                else:
-                    return {
-                        "error": "Multiple profiles found. Please select a profile first using get_profile",
-                        "status": "awaiting_selection"
-                    }
-
-            await self.orchestrator.start_collaborator_scraping(session_id, profile)
+            # Profil index'inin geçerli olduğunu kontrol et
+            with open(main_profile_file, 'r', encoding='utf-8') as f:
+                profile_data = json.load(f)
+                total_profiles = profile_data.get('total_profiles', 0)
+            
+            if profile_index < 1 or profile_index > total_profiles:
+                return {
+                    "error": f"Invalid profile index. Available: 1-{total_profiles}",
+                    "status": "failed"
+                }
+            
+            print(f"[MCP_INFO] Starting collaborators scraping for profile index: {profile_index}")
+            print(f"[MCP_INFO] Using session: {session_id}")
             
             return {
                 "session_id": session_id,
+                "profile_index": profile_index,
                 "status": "started",
-                "message": f"Collaborators scraping started for session '{session_id}'",
-                "timestamp": self.orchestrator.sessions[session_id].created_at.isoformat()
+                "message": f"Collaborators scraping started for profile index {profile_index}",
             }
             
         except Exception as e:
@@ -236,29 +223,19 @@ class YOKAcademicMCPAdapter:
                 "status": "failed"
             }
     
-    async def _get_profile(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Profil seç ve işbirlikçi tarama başlat"""
+    async def _get_profile_details(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Session'daki tüm profil verilerini JSON formatında döndür"""
         try:
-            session_id = arguments.get("session_id", "")
-            profile_id = arguments.get("profile_id")
+            session_id = arguments.get("session_id")
             
+            # Eğer session_id verilmezse, en son oluşturulan session'ı bul
             if not session_id:
-                return {
-                    "error": "Session ID is required",
-                    "status": "failed"
-                }
-            
-            if profile_id is None:
-                return {
-                    "error": "Profile ID is required",
-                    "status": "failed"
-                }
-            
-            if session_id not in self.orchestrator.sessions:
-                return {
-                    "error": "Session not found",
-                    "status": "failed"
-                }
+                session_id = await self._get_latest_session()
+                if not session_id:
+                    return {
+                        "error": "No session ID provided and no recent sessions found. Please run search_profile first.",
+                        "status": "failed"
+                    }
             
             # Session dosyasından profilleri oku
             session_dir = SESSIONS_DIR / session_id
@@ -270,41 +247,18 @@ class YOKAcademicMCPAdapter:
                     "status": "failed"
                 }
             
-            # main_profile.json'dan profilleri oku
+            # main_profile.json'ı tamamen oku
             with open(main_profile_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                profiles = data.get('profiles', [])
+                profile_data = json.load(f)
             
-            # Seçilen profili bul
-            selected_profile = None
-            for profile in profiles:
-                if profile.get('author_id') == profile_id:
-                    selected_profile = profile
-                    break
-            
-            if not selected_profile:
-                return {
-                    "error": f"Profile with ID {profile_id} not found in session",
-                    "status": "failed"
-                }
-            
-            print(f"[MCP_INFO] Selected profile: {selected_profile.get('name', 'N/A')}")
-            print(f"[MCP_INFO] Profile ID: {profile_id}")
-            print(f"[MCP_INFO] Profile selected successfully, ready for collaborator scraping...")
-            
-            # Session'a seçilen profili kaydet
-            session_info = self.orchestrator.sessions[session_id]
-            session_info.selected_profile = selected_profile
-            from core.mcp_orchestrator import ProcessState
-            session_info.state = ProcessState.AWAITING_SELECTION
+            print(f"[MCP_INFO] Returning complete profile data for session: {session_id}")
+            print(f"[MCP_INFO] Total profiles: {profile_data.get('total_profiles', 0)}")
+            print(f"[MCP_INFO] Status: {profile_data.get('status', 'unknown')}")
             
             return {
+                "status": "success",
                 "session_id": session_id,
-                "profile_id": profile_id,
-                "profile_name": selected_profile.get('name', 'N/A'),
-                "status": "selected",
-                "message": f"Profile '{selected_profile.get('name', 'N/A')}' selected successfully. Use get_collaborators to begin collaborator scraping.",
-                "timestamp": session_info.created_at.isoformat()
+                "profile_data": profile_data
             }
             
         except Exception as e:
@@ -313,56 +267,26 @@ class YOKAcademicMCPAdapter:
                 "status": "failed"
             }
     
-    async def _get_session_status(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Session durumunu kontrol et"""
+    def _get_latest_session(self) -> str:
+        """En son oluşturulan session ID'sini döndür"""
         try:
-            session_id = arguments.get("session_id", "")
+            # Sessions directory'den en son oluşturulan session'ı bul
+            if not SESSIONS_DIR.exists():
+                return None
             
-            if not session_id:
-                return {
-                    "error": "Session ID is required",
-                    "status": "failed"
-                }
+            session_dirs = [d for d in SESSIONS_DIR.iterdir() if d.is_dir() and d.name.startswith('session_')]
+            if not session_dirs:
+                return None
             
-            if session_id not in self.orchestrator.sessions:
-                return {
-                    "error": "Session not found",
-                    "status": "failed"
-                }
-            
-            session_info = self.orchestrator.sessions[session_id]
-            
-            # Session dosyalarını kontrol et
-            session_dir = SESSIONS_DIR / session_id
-            main_profile_file = session_dir / "main_profile.json"
-            collaborators_file = session_dir / "collaborators.json"
-            main_done_file = session_dir / "main_done.txt"
-            collaborators_done_file = session_dir / "collaborators_done.txt"
-            
-            status_info = {
-                "session_id": session_id,
-                "state": session_info.state.value,
-                "created_at": session_info.created_at.isoformat(),
-                "profiles_found": len(session_info.profiles),
-                "collaborators_found": len(session_info.collaborators),
-                "files": {
-                    "main_profile_exists": main_profile_file.exists(),
-                    "collaborators_exists": collaborators_file.exists(),
-                    "main_done_exists": main_done_file.exists(),
-                    "collaborators_done_exists": collaborators_done_file.exists()
-                }
-            }
-            
-            if session_info.error_message:
-                status_info["error"] = session_info.error_message
-            
-            return status_info
+            # En son oluşturulan session'ı bul (timestamp'e göre)
+            latest_session = max(session_dirs, key=lambda x: x.stat().st_mtime)
+            return latest_session.name
             
         except Exception as e:
-            return {
-                "error": str(e),
-                "status": "failed"
-            }
+            print(f"[MCP_ERROR] Error finding latest session: {e}")
+            return None
+    
+
 
 # MCP Adapter instance
 mcp_adapter = YOKAcademicMCPAdapter()

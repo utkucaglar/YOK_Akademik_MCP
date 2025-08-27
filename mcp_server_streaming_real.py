@@ -38,17 +38,32 @@ MAX_CONCURRENT_SESSIONS = int(os.getenv("MAX_CONCURRENT_SESSIONS", "10"))
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 log_format = os.getenv("LOG_FORMAT", "structured")
 
-if log_format == "structured":
+# Create logs directory if it doesn't exist
+log_file_path = os.getenv("LOG_FILE_PATH", "logs/mcp_server.log")
+log_dir = os.path.dirname(log_file_path)
+if log_dir:
+    os.makedirs(log_dir, exist_ok=True)
+
+# Simple logging for local development
+if os.getenv("NODE_ENV") == "production" and log_format == "structured":
     logging.basicConfig(
         level=getattr(logging, log_level),
         format='{"timestamp": "%(asctime)s", "level": "%(levelname)s", "module": "%(name)s", "message": "%(message)s"}',
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler(os.getenv("LOG_FILE_PATH", "logs/mcp_server.log"), mode='a')
+            logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
         ]
     )
 else:
-    logging.basicConfig(level=getattr(logging, log_level))
+    # Simple format for local development (no emojis in console)
+    logging.basicConfig(
+        level=getattr(logging, log_level),
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
+        ]
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +93,7 @@ class RealScrapingMCPProtocolServer:
         
         for dir_path in dirs_to_create:
             dir_path.mkdir(parents=True, exist_ok=True)
-            logger.info(f"📁 Directory ensured: {dir_path}")
+            logger.info(f"Directory ensured: {dir_path}")
         
     def generate_session_id(self):
         """Generate a readable and sortable session ID"""
@@ -309,34 +324,31 @@ class RealScrapingMCPProtocolServer:
     async def handle_streaming_tool_call(self, request, tool_name: str, arguments: Dict, session_id: str):
         """Handle streaming tool calls with real-time updates"""
         
-        # Check session limits
-        async with self.session_semaphore:
-            # Create streaming response with optimized headers
-            response = web.StreamResponse(
-                status=200,
-                reason='OK',
-                headers={
-                    'Content-Type': 'text/event-stream; charset=utf-8',
-                    'Cache-Control': 'no-cache, no-store, must-revalidate',
-                    'Connection': 'keep-alive',
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-                    'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
-                    'X-Accel-Buffering': 'no',  # Disable nginx buffering
-                    'Transfer-Encoding': 'chunked'
-                }
-            )
-            await response.prepare(request)
-        
-        # Start streaming task
-        task = asyncio.create_task(
-            self.stream_tool_execution(response, tool_name, arguments, session_id)
+        # Create streaming response
+        response = web.StreamResponse(
+            status=200,
+            reason='OK',
+            headers={
+                'Content-Type': 'text/event-stream; charset=utf-8',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
+                'X-Accel-Buffering': 'no'
+            }
         )
-        self.streaming_tasks[session_id] = task
-        self.active_streams[session_id] = response
+        await response.prepare(request)
         
         try:
-            # Send initial response with heartbeat setup
+            # Start streaming task
+            task = asyncio.create_task(
+                self.stream_tool_execution(response, tool_name, arguments, session_id)
+            )
+            self.streaming_tasks[session_id] = task
+            self.active_streams[session_id] = response
+        
+            # Send initial response
             await self.send_sse_event(response, {
                 'status': 'started', 
                 'tool': tool_name,
@@ -344,14 +356,8 @@ class RealScrapingMCPProtocolServer:
                 'timestamp': datetime.now().isoformat()
             })
             
-            # Start heartbeat task
-            heartbeat_task = asyncio.create_task(
-                self.heartbeat_task(response, session_id)
-            )
-            
-            # Keep connection alive until task completes
+            # Wait for completion
             await task
-            heartbeat_task.cancel()
             
         except asyncio.CancelledError:
             logger.info(f"Streaming cancelled for session: {session_id}")
@@ -445,14 +451,22 @@ class RealScrapingMCPProtocolServer:
         name = arguments.get('name', 'Unknown')
         logger.info(f"🔍 Starting REAL profile search for: {name}")
         
+        # Generate new scraping session ID for each search
+        scraping_session_id = self.generate_session_id()
+        logger.info(f"📝 Generated new scraping session ID: {scraping_session_id}")
+        
         # Send search started event
         await self.send_sse_event(response, {
             'event': 'search_started',
-            'data': {'name': name, 'timestamp': datetime.now().isoformat()}
+            'data': {
+                'name': name, 
+                'scraping_session_id': scraping_session_id,
+                'timestamp': datetime.now().isoformat()
+            }
         })
         
         # Create session directory
-        session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
+        session_dir = self.base_dir / "public" / "collaborator-sessions" / scraping_session_id
         session_dir.mkdir(parents=True, exist_ok=True)
         
         # Send connecting event
@@ -487,7 +501,7 @@ class RealScrapingMCPProtocolServer:
             
             # Start scraping process
             process = await asyncio.create_subprocess_exec(
-                sys.executable, str(scraping_script), name, session_id,
+                sys.executable, str(scraping_script), name, scraping_session_id,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.base_dir
@@ -598,6 +612,7 @@ class RealScrapingMCPProtocolServer:
                             'profiles_found': result_data.get('total_profiles', 0),
                             'results': result_data.get('profiles', []),
                             'status': result_data.get('status', 'completed'),
+                            'scraping_session_id': scraping_session_id,
                             'timestamp': datetime.now().isoformat()
                         }
                     })}\n\n".encode('utf-8'))
@@ -689,9 +704,9 @@ class RealScrapingMCPProtocolServer:
                 })}\n\n".encode('utf-8'))
                 return
             
-            # Select profile based on user choice or default to first
-            profile_index = arguments.get('profile_index', 0)
-            if profile_index >= len(profiles):
+            # Select profile based on user choice (1-based) or default to first
+            profile_index = arguments.get('profile_index', 1) - 1  # Convert to 0-based
+            if profile_index < 0 or profile_index >= len(profiles):
                 profile_index = 0
                 logger.warning(f"⚠️  Invalid profile index {arguments.get('profile_index')}, using first profile")
             
@@ -1078,74 +1093,326 @@ class RealScrapingMCPProtocolServer:
         return web.json_response(responses, headers=self.get_cors_headers())
     
     async def handle_streaming_tools_call(self, request, data, session_id):
-        """Handle streaming tools/call with SSE response - MCP 2025-03-26"""
+        """Handle streaming tools/call with JSON response - MCP 2025-03-26"""
         tool_name = data.get("params", {}).get("name")
         arguments = data.get("params", {}).get("arguments", {})
         
-        logger.info(f"🔧 Streaming tool call: {tool_name}")
-        
-        # Create SSE response
-        response = web.StreamResponse(
-            status=200,
-            reason='OK',
-            headers={
-                'Content-Type': 'text/event-stream; charset=utf-8',
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Connection': 'keep-alive',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id, Last-Event-ID',
-                'Access-Control-Expose-Headers': 'Mcp-Session-Id',
-                'X-Accel-Buffering': 'no'
-            }
-        )
-        await response.prepare(request)
+        logger.info(f"🔧 Tool call: {tool_name}")
         
         try:
-            # Send streaming response for tool execution
-            await self.stream_tool_execution(response, tool_name, arguments, session_id)
+            # Execute tool synchronously for Inspector compatibility
+            if tool_name == "search_profile":
+                name = arguments.get("name", "")
+                
+                # Generate new scraping session ID
+                scraping_session_id = self.generate_session_id()
+                
+                # Start background scraping (non-blocking)
+                asyncio.create_task(self.run_profile_scraping_sync(scraping_session_id, name))
+                
+                # Return immediate response
+                result_text = f"🔍 Profil araması başlatıldı: '{name}'\n🆔 Scraping Session ID: {scraping_session_id}\n\n"
+                result_text += "⚡ Scraping arka planda çalışıyor...\n"
+                result_text += "📋 Sonuçları görmek için birkaç saniye bekleyip get_profile tool'unu kullanın\n\n"
+                result_text += "💡 İpucu: get_profile ile profil listesini görün\n"
+                result_text += "👥 İpucu: get_collaborators ile işbirlikçi araması yapın"
+                
+            elif tool_name == "get_profile":
+                profile_index = arguments.get("profile_index", 1)
+                profile_data = await self.get_profile_data(session_id, profile_index)
+                if "error" in profile_data:
+                    # Check if it's because scraping hasn't completed yet
+                    session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
+                    if session_dir.exists():
+                        result_text = f"⏳ Scraping henüz tamamlanmamış olabilir...\n\n"
+                        result_text += f"❌ Hata: {profile_data['error']}\n\n"
+                        result_text += "💡 Birkaç saniye bekleyip tekrar deneyin\n"
+                        result_text += f"📁 Session: {session_id}"
+                    else:
+                        result_text = f"❌ Hata: {profile_data['error']}"
+                else:
+                    profile = profile_data["profile"]
+                    result_text = f"""📋 Profil Detayları (Index: {profile_index})
+
+👤 İsim: {profile.get('name', 'N/A')}
+🎓 Ünvan: {profile.get('title', 'N/A')}
+🏫 Kurum: {profile.get('education', 'N/A')}
+📧 Email: {profile.get('email', 'N/A')}
+🔬 Alan: {profile.get('field', 'N/A')}
+📚 Uzmanlık: {profile.get('speciality', 'N/A')}
+🔑 Anahtar Kelimeler: {profile.get('keywords', 'N/A')}
+🆔 Author ID: {profile.get('author_id', 'N/A')}
+🔗 Profil URL: {profile.get('profile_url', 'N/A')}
+
+📊 Toplam Profil Sayısı: {profile_data.get('total_profiles', 0)}
+
+💡 İşbirlikçi araması için: get_collaborators {profile_index}"""
+                
+            elif tool_name == "get_collaborators":
+                profile_index = arguments.get("profile_index", 1)
+                
+                # Start background collaborator scraping (non-blocking)
+                asyncio.create_task(self.run_collaborator_scraping_sync(session_id, profile_index))
+                
+                # Return immediate response
+                result_text = f"👥 İşbirlikçi araması başlatıldı (Profil Index: {profile_index})\n🆔 Session ID: {session_id}\n\n"
+                result_text += "⚡ Collaborator scraping arka planda çalışıyor...\n"
+                result_text += "📋 Bu işlem 1-2 dakika sürebilir\n\n"
+                result_text += "💡 Sonuçlar hazır olduğunda session dosyalarında görünecek\n"
+                result_text += f"📁 Konum: public/collaborator-sessions/{session_id}/collaborators.json"
+                
+            else:
+                result_text = f"❌ Bilinmeyen tool: {tool_name}"
             
-            # Send final JSON-RPC response
-            final_response = {
+            return web.json_response({
                 "jsonrpc": "2.0",
                 "id": data.get("id"),
                 "result": {
                     "content": [
                         {
                             "type": "text",
-                            "text": f"Tool {tool_name} completed successfully"
+                            "text": result_text
                         }
                     ]
                 }
-            }
-            
-            event_data = json.dumps(final_response, ensure_ascii=False, separators=(',', ':'))
-            await response.write(f"data: {event_data}\n\n".encode('utf-8'))
-            await response.drain()
+            }, headers=self.get_cors_headers())
             
         except Exception as e:
-            logger.error(f"Streaming tool call error: {e}")
-            error_response = {
+            logger.error(f"Tool call error: {e}")
+            return web.json_response({
                 "jsonrpc": "2.0",
                 "id": data.get("id"),
                 "error": {
                     "code": -32603,
                     "message": f"Tool execution error: {str(e)}"
                 }
+            }, headers=self.get_cors_headers())
+    
+    async def background_profile_search(self, session_id: str, name: str):
+        """Background task for profile search"""
+        try:
+            logger.info(f"🔍 Starting background profile search for: {name}")
+            # Create a dummy response for streaming (will be used by SSE clients)
+            # Tool execution completes immediately, streaming happens in background
+            session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
+            session_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Run the actual scraping
+            await self.run_profile_scraping(session_id, name)
+            
+        except Exception as e:
+            logger.error(f"Background profile search error: {e}")
+    
+    async def background_collaborator_search(self, session_id: str, profile_index: int):
+        """Background task for collaborator search"""
+        try:
+            logger.info(f"👥 Starting background collaborator search for profile {profile_index}")
+            # Run the actual scraping
+            await self.run_collaborator_scraping(session_id, profile_index)
+            
+        except Exception as e:
+            logger.error(f"Background collaborator search error: {e}")
+    
+    async def run_profile_scraping(self, session_id: str, name: str):
+        """Run actual profile scraping"""
+        try:
+            session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
+            script_path = self.base_dir / "src" / "tools" / "scrape_main_profile.py"
+            
+            # Execute scraping script
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, str(script_path), name, session_id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(self.base_dir)
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                logger.info(f"✅ Profile scraping completed for: {name}")
+            else:
+                logger.error(f"❌ Profile scraping failed: {stderr.decode()}")
+                
+        except Exception as e:
+            logger.error(f"Profile scraping error: {e}")
+    
+    async def run_collaborator_scraping(self, session_id: str, profile_index: int):
+        """Run actual collaborator scraping"""
+        try:
+            session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
+            script_path = self.base_dir / "src" / "tools" / "scrape_collaborators.py"
+            
+            # Execute scraping script
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, str(script_path), str(profile_index), session_id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(self.base_dir)
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                logger.info(f"✅ Collaborator scraping completed for profile {profile_index}")
+            else:
+                logger.error(f"❌ Collaborator scraping failed: {stderr.decode()}")
+                
+        except Exception as e:
+            logger.error(f"Collaborator scraping error: {e}")
+    
+    async def run_profile_scraping_sync(self, session_id: str, name: str):
+        """Run profile scraping synchronously and wait for completion"""
+        try:
+            session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
+            session_dir.mkdir(parents=True, exist_ok=True)
+            script_path = self.base_dir / "src" / "tools" / "scrape_main_profile.py"
+            
+            logger.info(f"🔍 Starting synchronous profile scraping for: {name}")
+            
+            # Execute scraping script and wait for completion
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, str(script_path), name, session_id,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(self.base_dir)
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                logger.info(f"✅ Synchronous profile scraping completed for: {name}")
+            else:
+                error_output = stderr.decode('utf-8', errors='ignore')
+                logger.error(f"❌ Synchronous profile scraping failed: {error_output}")
+                raise Exception(f"Scraping failed with return code {process.returncode}: {error_output}")
+                
+        except Exception as e:
+            logger.error(f"Synchronous profile scraping error: {e}")
+            raise
+    
+    async def run_collaborator_scraping_sync(self, session_id: str, profile_index: int):
+        """Run collaborator scraping synchronously and wait for completion"""
+        try:
+            session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
+            script_path = self.base_dir / "src" / "tools" / "scrape_collaborators.py"
+            
+            # First, read the selected profile from main_profile.json
+            main_profile_path = session_dir / "main_profile.json"
+            if not main_profile_path.exists():
+                raise Exception(f"Main profile file not found: {main_profile_path}")
+            
+            with open(main_profile_path, 'r', encoding='utf-8') as f:
+                profile_data = json.load(f)
+                profiles = profile_data.get('profiles', [])
+            
+            if not profiles:
+                raise Exception("No profiles found in main profile data")
+            
+            # Convert 1-based index to 0-based and validate
+            array_index = profile_index - 1
+            if array_index < 0 or array_index >= len(profiles):
+                raise Exception(f"Invalid profile index {profile_index}. Available: 1-{len(profiles)}")
+            
+            selected_profile = profiles[array_index]
+            profile_name = selected_profile.get('name', 'Unknown')
+            profile_url = selected_profile.get('profile_url', '')
+            
+            if not profile_url:
+                raise Exception(f"No profile URL found for profile: {profile_name}")
+            
+            logger.info(f"👥 Starting synchronous collaborator scraping for profile {profile_index}: {profile_name}")
+            
+            # Execute scraping script with correct parameters
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, str(script_path), profile_name, session_id, "--profile-url", profile_url,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(self.base_dir)
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                logger.info(f"✅ Synchronous collaborator scraping completed for profile {profile_index}")
+            else:
+                error_output = stderr.decode('utf-8', errors='ignore')
+                logger.error(f"❌ Synchronous collaborator scraping failed: {error_output}")
+                raise Exception(f"Collaborator scraping failed with return code {process.returncode}: {error_output}")
+                
+        except Exception as e:
+            logger.error(f"Synchronous collaborator scraping error: {e}")
+            raise
+    
+    async def get_session_status(self, session_id: str):
+        """Get session status"""
+        try:
+            session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
+            
+            if not session_dir.exists():
+                return {"status": "not_found", "message": "Session not found"}
+            
+            main_profile_file = session_dir / "main_profile.json"
+            collaborators_file = session_dir / "collaborators.json"
+            
+            status = {
+                "session_id": session_id,
+                "profile_search": "completed" if main_profile_file.exists() else "not_started",
+                "collaborator_search": "completed" if collaborators_file.exists() else "not_started"
             }
-            event_data = json.dumps(error_response)
-            await response.write(f"data: {event_data}\n\n".encode('utf-8'))
-            await response.drain()
-        
-        return response
+            
+            if main_profile_file.exists():
+                with open(main_profile_file, 'r', encoding='utf-8') as f:
+                    profile_data = json.load(f)
+                    status["total_profiles"] = profile_data.get("total_profiles", 0)
+            
+            if collaborators_file.exists():
+                with open(collaborators_file, 'r', encoding='utf-8') as f:
+                    collab_data = json.load(f)
+                    status["total_collaborators"] = collab_data.get("total_profiles", 0)
+            
+            return status
+            
+        except Exception as e:
+            logger.error(f"Get session status error: {e}")
+            return {"status": "error", "message": str(e)}
+    
+    async def get_profile_data(self, session_id: str, profile_index: int):
+        """Get specific profile data"""
+        try:
+            session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
+            main_profile_file = session_dir / "main_profile.json"
+            
+            if not main_profile_file.exists():
+                return {"error": "No profile data found. Run search_profile first."}
+            
+            with open(main_profile_file, 'r', encoding='utf-8') as f:
+                profile_data = json.load(f)
+                profiles = profile_data.get("profiles", [])
+            
+            if profile_index < 1 or profile_index > len(profiles):
+                return {"error": f"Invalid profile index. Available: 1-{len(profiles)}"}
+            
+            selected_profile = profiles[profile_index - 1]
+            return {
+                "profile_index": profile_index,
+                "profile": selected_profile,
+                "total_profiles": len(profiles)
+            }
+            
+        except Exception as e:
+            logger.error(f"Get profile data error: {e}")
+            return {"error": str(e)}
 
+@web.middleware
 async def cors_middleware(request, handler):
     """CORS middleware for all requests"""
     if request.method == "OPTIONS":
         # Handle preflight requests
         headers = {
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id, Authorization',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
+            'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id, Last-Event-ID, Authorization',
             'Access-Control-Max-Age': '3600'
         }
         return web.Response(headers=headers)
@@ -1156,8 +1423,9 @@ async def cors_middleware(request, handler):
     # Add CORS headers to response
     response.headers.update({
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id, Authorization'
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
+        'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id, Last-Event-ID, Authorization',
+        'Access-Control-Expose-Headers': 'Mcp-Session-Id'
     })
     
     return response
@@ -1272,35 +1540,33 @@ if __name__ == "__main__":
         
         app = create_app()
         logger.info("=" * 80)
-        logger.info("🎓 YÖK Akademik Asistanı - MCP Real Scraping Server v3.0.0")
+        logger.info("YOK Akademik Asistani - MCP Real Scraping Server v3.0.0")
         logger.info("=" * 80)
-        logger.info(f"🌐 Server: http://{SERVER_HOST}:{SERVER_PORT}")
-        logger.info(f"🔧 MCP Endpoint: http://{SERVER_HOST}:{SERVER_PORT}/mcp")
-        logger.info(f"❤️  Health Check: http://{SERVER_HOST}:{SERVER_PORT}/ready")
-        logger.info(f"📊 Metrics: http://{SERVER_HOST}:{SERVER_PORT}/metrics")
+        logger.info(f"Server: http://{SERVER_HOST}:{SERVER_PORT}")
+        logger.info(f"MCP Endpoint: http://{SERVER_HOST}:{SERVER_PORT}/mcp")
+        logger.info(f"Health Check: http://{SERVER_HOST}:{SERVER_PORT}/ready")
+        logger.info(f"Metrics: http://{SERVER_HOST}:{SERVER_PORT}/metrics")
         logger.info("=" * 80)
-        logger.info(f"🚀 Environment: {os.getenv('NODE_ENV', 'development')}")
-        logger.info(f"📡 Real-time streaming: {HEADLESS_MODE and 'Enabled' or 'Development Mode'}")
-        logger.info(f"🔒 CORS: {CORS_ENABLED and 'Enabled' or 'Disabled'}")
-        logger.info(f"👥 Max Sessions: {MAX_CONCURRENT_SESSIONS}")
-        logger.info(f"💓 Heartbeat: {SSE_HEARTBEAT_INTERVAL}s")
-        logger.info(f"🌍 Chrome: {chrome_bin}")
+        logger.info(f"Environment: {os.getenv('NODE_ENV', 'development')}")
+        logger.info(f"Real-time streaming: {HEADLESS_MODE and 'Enabled' or 'Development Mode'}")
+        logger.info(f"CORS: {CORS_ENABLED and 'Enabled' or 'Disabled'}")
+        logger.info(f"Max Sessions: {MAX_CONCURRENT_SESSIONS}")
+        logger.info(f"Heartbeat: {SSE_HEARTBEAT_INTERVAL}s")
+        logger.info(f"Chrome: {chrome_bin}")
         logger.info("=" * 80)
-        logger.info("✅ Server starting...")
+        logger.info("Server starting...")
         
         web.run_app(
             app, 
             host=SERVER_HOST, 
             port=SERVER_PORT,
             access_log=logger,
-            shutdown_timeout=30,
-            keepalive_timeout=15,
-            client_timeout=30
+            shutdown_timeout=30
         )
     except KeyboardInterrupt:
-        logger.info("🛑 Server stopped by user")
+        logger.info("Server stopped by user")
     except Exception as e:
-        logger.error(f"❌ Server startup error: {e}")
+        logger.error(f"Server startup error: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

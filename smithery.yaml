@@ -58,20 +58,16 @@ mcp:
   # Tool definitions
   tools:
     - name: "search_profile"
-      description: "YÖK Akademik platformunda akademisyen profili ara ve işbirlikçilerini tara"
+      description: "YÖK Akademik platformunda akademisyen profili ara (real-time streaming ile sonuçları sunar)"
       streaming: true
-      
-    - name: "get_collaborators"
-      description: "Belirtilen session için işbirlikçi tarama başlat"
-      streaming: true
-      
-    - name: "get_session_status"
-      description: "Aktif session'ın durumunu kontrol et"
-      streaming: false
       
     - name: "get_profile"
-      description: "Main profile scraping sonrası hangi profilin işbirlikçilerinin taranacağını seç"
+      description: "Session'daki tüm profil verilerini JSON formatında döndürür"
       streaming: false
+      
+    - name: "get_collaborators"
+      description: "Seçilen profil için işbirlikçi araştırması başlatır"
+      streaming: true
 
 # Resource limits
 resources:
