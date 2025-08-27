@@ -1,0 +1,138 @@
+name: yok-akademik-mcp
+description: "YÖK Akademik Asistanı - MCP Server with Real-time Streaming"
+version: "3.0.0"
+
+# Smithery deployment configuration
+deployment:
+  type: mcp-server
+  protocol: http
+  streaming: true
+  
+# Runtime configuration
+runtime:
+  python: "3.10"
+  port: 5000
+  
+# Build configuration
+build:
+  install: |
+    pip install -r requirements.txt
+  
+# Health check configuration
+health:
+  path: "/health"
+  interval: 30
+  timeout: 10
+
+# Environment variables
+environment:
+  NODE_ENV: production
+  PYTHON_ENV: production
+  MCP_SERVER_PORT: 5000
+  MCP_SERVER_HOST: "0.0.0.0"
+  HEADLESS_MODE: "true"
+  CHROME_BIN: "/usr/bin/google-chrome"
+  CHROME_DRIVER_PATH: "/usr/local/bin/chromedriver"
+
+# MCP server configuration
+mcp:
+  protocol_version: "2024-11-05"
+  capabilities:
+    tools: true
+    logging: true
+    experimental: true
+  
+  # Server endpoints
+  endpoints:
+    main: "/mcp"
+    stream: "/mcp/stream"
+    health: "/health"
+  
+  # Tool definitions
+  tools:
+    - name: "search_profile"
+      description: "YÖK Akademik platformunda akademisyen profili ara ve işbirlikçilerini tara"
+      streaming: true
+      
+    - name: "get_collaborators"
+      description: "Belirtilen session için işbirlikçi tarama başlat"
+      streaming: true
+      
+    - name: "get_session_status"
+      description: "Aktif session'ın durumunu kontrol et"
+      streaming: false
+      
+    - name: "get_profile"
+      description: "Main profile scraping sonrası hangi profilin işbirlikçilerinin taranacağını seç"
+      streaming: false
+
+# Resource limits
+resources:
+  memory: "2Gi"
+  cpu: "1000m"
+  storage: "10Gi"
+
+# Logging configuration
+logging:
+  level: "INFO"
+  format: "structured"
+  outputs:
+    - "stdout"
+    - "file"
+
+# Security configuration
+security:
+  enable_cors: true
+  allowed_origins:
+    - "*"
+  rate_limiting:
+    enabled: true
+    requests_per_minute: 60
+    burst: 10
+
+# Monitoring
+monitoring:
+  metrics: true
+  traces: true
+  alerts:
+    - type: "error_rate"
+      threshold: 0.05
+    - type: "response_time"
+      threshold: 30000
+
+# Scaling configuration
+scaling:
+  min_instances: 1
+  max_instances: 3
+  target_cpu: 70
+  target_memory: 80
+
+# Data persistence
+persistence:
+  - name: "sessions"
+    path: "/app/public/collaborator-sessions"
+    size: "5Gi"
+    access_mode: "ReadWriteOnce"
+
+# Dependencies
+dependencies:
+  - name: "chrome"
+    version: "latest"
+    required: true
+  - name: "chromedriver"
+    version: "latest"
+    required: true
+
+# Startup command
+start_command: "python mcp_server_streaming_real.py"
+
+# Readiness and liveness probes
+probes:
+  readiness:
+    path: "/health"
+    initial_delay: 30
+    period: 10
+  liveness:
+    path: "/health"
+    initial_delay: 60
+    period: 30

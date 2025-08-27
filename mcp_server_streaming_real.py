@@ -14,44 +14,43 @@ from typing import Any, Dict, List, Optional, AsyncGenerator
 from datetime import datetime
 import time
 from aiohttp import web, ClientSession
+from aiohttp_cors import setup as cors_setup, ResourceOptions
 import logging
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv(dotenv_path=Path(__file__).parent / "config.env")
 
 # Add src to Python path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-try:
-    from mcp_adapter import YOKAcademicMCPAdapter
-except ImportError as e:
-    logger.error(f"Failed to import MCP adapter: {e}")
-    # Create a minimal fallback adapter
-    class YOKAcademicMCPAdapter:
-        def __init__(self):
-            pass
-        
-        def get_tools(self):
-            return [
-                {
-                    "name": "search_profile",
-                    "description": "YÖK Akademik platformunda akademisyen profili ara",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "name": {"type": "string", "description": "Aranacak akademisyenin adı"}
-                        },
-                        "required": ["name"]
-                    }
-                }
-            ]
-        
-        async def execute_tool(self, tool_name, arguments):
-            return {
-                "status": "success",
-                "message": f"Tool {tool_name} executed with args: {arguments}",
-                "note": "Running in fallback mode"
-            }
+from mcp_adapter import YOKAcademicMCPAdapter
 
-# Logging
-logging.basicConfig(level=logging.INFO)
+# Environment configuration
+SERVER_HOST = os.getenv("MCP_SERVER_HOST", "localhost")
+SERVER_PORT = int(os.getenv("MCP_SERVER_PORT", "5000"))
+HEADLESS_MODE = os.getenv("HEADLESS_MODE", "false").lower() == "true"
+CORS_ENABLED = os.getenv("CORS_ENABLED", "true").lower() == "true"
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+SSE_HEARTBEAT_INTERVAL = int(os.getenv("SSE_HEARTBEAT_INTERVAL", "15"))
+MAX_CONCURRENT_SESSIONS = int(os.getenv("MAX_CONCURRENT_SESSIONS", "10"))
+
+# Logging configuration
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+log_format = os.getenv("LOG_FORMAT", "structured")
+
+if log_format == "structured":
+    logging.basicConfig(
+        level=getattr(logging, log_level),
+        format='{"timestamp": "%(asctime)s", "level": "%(levelname)s", "module": "%(name)s", "message": "%(message)s"}',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(os.getenv("LOG_FILE_PATH", "logs/mcp_server.log"), mode='a')
+        ]
+    )
+else:
+    logging.basicConfig(level=getattr(logging, log_level))
+
 logger = logging.getLogger(__name__)
 
 class RealScrapingMCPProtocolServer:
@@ -64,7 +63,23 @@ class RealScrapingMCPProtocolServer:
         self.sessions = {}
         self.adapter = YOKAcademicMCPAdapter()
         self.streaming_tasks = {}  # Track active streaming tasks
+        self.active_streams = {}  # Track active SSE connections
         self.base_dir = Path(__file__).parent
+        self.session_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SESSIONS)
+        
+        # Create necessary directories
+        self.ensure_directories()
+    
+    def ensure_directories(self):
+        """Ensure all required directories exist"""
+        dirs_to_create = [
+            self.base_dir / "public" / "collaborator-sessions",
+            self.base_dir / "logs"
+        ]
+        
+        for dir_path in dirs_to_create:
+            dir_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"📁 Directory ensured: {dir_path}")
         
     def generate_session_id(self):
         """Generate a readable and sortable session ID"""
@@ -94,24 +109,21 @@ class RealScrapingMCPProtocolServer:
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {
-                        "tools": {
-                            "listChanged": False
-                        },
+                        "tools": {},
                         "logging": {},
                         "experimental": {}
                     },
                     "serverInfo": {
                         "name": "YOK Academic MCP Real Scraping Server",
                         "version": "3.0.0"
-                    },
-                    "instructions": "Use this server to search and analyze YÖK Academic profiles and collaborations."
+                    }
                 }
             }
             
             # Session ID'yi header'a ekle
             resp = web.json_response(response)
             resp.headers['mcp-session-id'] = session_id
-            logger.info(f"✅ MCP Session initialized: {session_id}")
+            logger.info(f"✅ Session initialized: {session_id}")
             return resp
             
         except Exception as e:
@@ -129,8 +141,18 @@ class RealScrapingMCPProtocolServer:
         """MCP tools/list endpoint"""
         try:
             data = await request.json()
+            session_id = request.headers.get('mcp-session-id')
             
-            # Smithery compatibility: Don't require session for tools list
+            if not session_id or session_id not in self.sessions:
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": data.get("id"),
+                    "error": {
+                        "code": -32001,
+                        "message": "Invalid session"
+                    }
+                }, status=400)
+            
             tools = self.adapter.get_tools()
             
             response = {
@@ -141,14 +163,14 @@ class RealScrapingMCPProtocolServer:
                 }
             }
             
-            logger.info(f"📋 Tools listed for MCP scan")
+            logger.info(f"📋 Tools listed for session: {session_id}")
             return web.json_response(response)
             
         except Exception as e:
             logger.error(f"Tools list error: {e}")
             return web.json_response({
                 "jsonrpc": "2.0",
-                "id": data.get("id") if 'data' in locals() else None,
+                "id": data.get("id"),
                 "error": {
                     "code": -32603,
                     "message": f"Internal error: {str(e)}"
@@ -156,11 +178,21 @@ class RealScrapingMCPProtocolServer:
             }, status=500)
     
     async def handle_tools_call(self, request):
-        """MCP tools/call endpoint with proper JSON-RPC response"""
+        """MCP tools/call endpoint with streaming support"""
         try:
             data = await request.json()
+            session_id = request.headers.get('mcp-session-id')
             
-            # For Smithery compatibility, don't require session for simple tool calls
+            if not session_id or session_id not in self.sessions:
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": data.get("id"),
+                    "error": {
+                        "code": -32001,
+                        "message": "Invalid session"
+                    }
+                }, status=400)
+            
             tool_name = data.get("params", {}).get("name")
             arguments = data.get("params", {}).get("arguments", {})
             
@@ -176,42 +208,19 @@ class RealScrapingMCPProtocolServer:
             
             logger.info(f"🔧 Calling tool: {tool_name} with args: {arguments}")
             
-            # Execute tool through adapter
-            try:
-                result = await self.adapter.execute_tool(tool_name, arguments)
-                
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": data.get("id"),
-                    "result": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": json.dumps(result, indent=2, ensure_ascii=False)
-                            }
-                        ]
-                    }
-                }
-                
-                logger.info(f"✅ {tool_name} completed successfully")
-                return web.json_response(response)
-                
-            except Exception as e:
-                logger.error(f"Tool execution error: {e}")
-                return web.json_response({
-                    "jsonrpc": "2.0",
-                    "id": data.get("id"),
-                    "error": {
-                        "code": -32603,
-                        "message": f"Tool execution failed: {str(e)}"
-                    }
-                }, status=500)
+            # Check if this is a streaming tool
+            if tool_name in ['search_profile', 'get_collaborators']:
+                # Return streaming response
+                return await self.handle_streaming_tool_call(request, tool_name, arguments, session_id)
+            else:
+                # Return immediate response for non-streaming tools
+                return await self.handle_immediate_tool_call(request, tool_name, arguments, session_id)
                 
         except Exception as e:
             logger.error(f"Tools call error: {e}")
             return web.json_response({
                 "jsonrpc": "2.0",
-                "id": data.get("id") if 'data' in locals() else None,
+                "id": data.get("id"),
                 "error": {
                     "code": -32603,
                     "message": f"Internal error: {str(e)}"
@@ -221,39 +230,90 @@ class RealScrapingMCPProtocolServer:
     async def handle_streaming_tool_call(self, request, tool_name: str, arguments: Dict, session_id: str):
         """Handle streaming tool calls with real-time updates"""
         
-        # Create streaming response
-        response = web.StreamResponse(
-            status=200,
-            reason='OK',
-            headers={
-                'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
-                'Access-Control-Allow-Origin': '*'
-            }
-        )
-        await response.prepare(request)
+        # Check session limits
+        async with self.session_semaphore:
+            # Create streaming response with optimized headers
+            response = web.StreamResponse(
+                status=200,
+                reason='OK',
+                headers={
+                    'Content-Type': 'text/event-stream; charset=utf-8',
+                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                    'Connection': 'keep-alive',
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                    'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
+                    'X-Accel-Buffering': 'no',  # Disable nginx buffering
+                    'Transfer-Encoding': 'chunked'
+                }
+            )
+            await response.prepare(request)
         
         # Start streaming task
         task = asyncio.create_task(
             self.stream_tool_execution(response, tool_name, arguments, session_id)
         )
         self.streaming_tasks[session_id] = task
+        self.active_streams[session_id] = response
         
         try:
-            # Send initial response
-            await response.write(f"data: {json.dumps({'status': 'started', 'tool': tool_name})}\n\n".encode('utf-8'))
+            # Send initial response with heartbeat setup
+            await self.send_sse_event(response, {
+                'status': 'started', 
+                'tool': tool_name,
+                'session_id': session_id,
+                'timestamp': datetime.now().isoformat()
+            })
+            
+            # Start heartbeat task
+            heartbeat_task = asyncio.create_task(
+                self.heartbeat_task(response, session_id)
+            )
             
             # Keep connection alive until task completes
             await task
+            heartbeat_task.cancel()
             
         except asyncio.CancelledError:
             logger.info(f"Streaming cancelled for session: {session_id}")
+        except Exception as e:
+            logger.error(f"Streaming error for session {session_id}: {e}")
+            await self.send_sse_event(response, {
+                'status': 'error',
+                'error': str(e),
+                'session_id': session_id,
+                'timestamp': datetime.now().isoformat()
+            })
         finally:
             if session_id in self.streaming_tasks:
                 del self.streaming_tasks[session_id]
+            if session_id in self.active_streams:
+                del self.active_streams[session_id]
         
         return response
+    
+    async def send_sse_event(self, response: web.StreamResponse, data: Dict):
+        """Send SSE event with proper formatting"""
+        try:
+            event_data = json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+            message = f"data: {event_data}\n\n"
+            await response.write(message.encode('utf-8'))
+            await response.drain()
+        except Exception as e:
+            logger.error(f"Failed to send SSE event: {e}")
+    
+    async def heartbeat_task(self, response: web.StreamResponse, session_id: str):
+        """Send periodic heartbeats to keep connection alive"""
+        try:
+            while session_id in self.active_streams:
+                await asyncio.sleep(SSE_HEARTBEAT_INTERVAL)
+                if session_id in self.active_streams:
+                    await response.write(b": heartbeat\n\n")
+                    await response.drain()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning(f"Heartbeat failed for session {session_id}: {e}")
     
     async def handle_immediate_tool_call(self, request, tool_name: str, arguments: Dict, session_id: str):
         """Handle immediate tool calls with direct response"""
@@ -307,19 +367,17 @@ class RealScrapingMCPProtocolServer:
         logger.info(f"🔍 Starting REAL profile search for: {name}")
         
         # Send search started event
-        data = {
+        await self.send_sse_event(response, {
             'event': 'search_started',
             'data': {'name': name, 'timestamp': datetime.now().isoformat()}
-        }
-        await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
-        await response.drain()
+        })
         
         # Create session directory
         session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
         
         # Send connecting event
-        data = {
+        await self.send_sse_event(response, {
             'event': 'progress_update',
             'data': {
                 'step': 1,
@@ -328,9 +386,7 @@ class RealScrapingMCPProtocolServer:
                 'progress': '20.0%',
                 'timestamp': datetime.now().isoformat()
             }
-        }
-        await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
-        await response.drain()
+        })
         
         # Start real scraping process
         try:
@@ -338,7 +394,7 @@ class RealScrapingMCPProtocolServer:
             scraping_script = self.base_dir / "src" / "tools" / "scrape_main_profile.py"
             
             # Send scraping started event
-            data = {
+            await response.write(f"data: {json.dumps({
                 'event': 'progress_update',
                 'data': {
                     'step': 2,
@@ -347,8 +403,7 @@ class RealScrapingMCPProtocolServer:
                     'progress': '40.0%',
                     'timestamp': datetime.now().isoformat()
                 }
-            }
-            await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+            })}\n\n".encode('utf-8'))
             await response.drain()
             
             # Start scraping process
@@ -360,7 +415,7 @@ class RealScrapingMCPProtocolServer:
             )
             
             # Send scraping in progress event
-            data = {
+            await response.write(f"data: {json.dumps({
                 'event': 'progress_update',
                 'data': {
                     'step': 3,
@@ -369,8 +424,7 @@ class RealScrapingMCPProtocolServer:
                     'progress': '60.0%',
                     'timestamp': datetime.now().isoformat()
                 }
-            }
-            await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+            })}\n\n".encode('utf-8'))
             await response.drain()
             
             # Monitor the scraping process in real-time with file watching
@@ -402,7 +456,7 @@ class RealScrapingMCPProtocolServer:
                             total_profiles = current_data.get('total_profiles', 0)
                             
                             # Send incremental update
-                            data = {
+                            await response.write(f"data: {json.dumps({
                                 'event': 'profiles_update',
                                 'data': {
                                     'profiles_found': total_profiles,
@@ -410,8 +464,7 @@ class RealScrapingMCPProtocolServer:
                                     'timestamp': datetime.now().isoformat(),
                                     'message': f'Found {total_profiles} profiles so far...'
                                 }
-                            }
-                            await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+                            })}\n\n".encode('utf-8'))
                             await response.drain()
                             
                             logger.info(f"📡 Streamed {total_profiles} profiles in real-time")
@@ -424,14 +477,13 @@ class RealScrapingMCPProtocolServer:
                             logger.warning(f"⚠️  Error reading file: {e}")
                 
                 # Send heartbeat/progress update
-                data = {
+                await response.write(f"data: {json.dumps({
                     'event': 'scraping_progress',
                     'data': {
                         'message': 'Scraping in progress...',
                         'timestamp': datetime.now().isoformat()
                     }
-                }
-                await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+                })}\n\n".encode('utf-8'))
                 await response.drain()
                 
                 # Wait a bit before next update
@@ -442,7 +494,7 @@ class RealScrapingMCPProtocolServer:
             
             if process.returncode == 0:
                 # Send processing event
-                data = {
+                await response.write(f"data: {json.dumps({
                     'event': 'progress_update',
                     'data': {
                         'step': 4,
@@ -451,8 +503,7 @@ class RealScrapingMCPProtocolServer:
                         'progress': '80.0%',
                         'timestamp': datetime.now().isoformat()
                     }
-                }
-                await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+                })}\n\n".encode('utf-8'))
                 await response.drain()
                 
                 # Read the results
@@ -462,7 +513,7 @@ class RealScrapingMCPProtocolServer:
                         result_data = json.load(f)
                     
                     # Send completion with real results
-                    data = {
+                    await response.write(f"data: {json.dumps({
                         'event': 'search_completed',
                         'data': {
                             'profiles_found': result_data.get('total_profiles', 0),
@@ -470,43 +521,39 @@ class RealScrapingMCPProtocolServer:
                             'status': result_data.get('status', 'completed'),
                             'timestamp': datetime.now().isoformat()
                         }
-                    }
-                    await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+                    })}\n\n".encode('utf-8'))
                     
                     logger.info(f"✅ Real profile search completed: {result_data.get('total_profiles', 0)} profiles found")
                 else:
                     # Send error if no results file
-                    data = {
+                    await response.write(f"data: {json.dumps({
                         'event': 'search_error',
                         'data': {
                             'error': 'No results file found after scraping',
                             'timestamp': datetime.now().isoformat()
                         }
-                    }
-                    await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+                    })}\n\n".encode('utf-8'))
             else:
                 # Send error if scraping failed
                 error_output = stderr.decode('utf-8', errors='ignore')
-                data = {
+                await response.write(f"data: {json.dumps({
                     'event': 'search_error',
                     'data': {
                         'error': f'Scraping failed with return code {process.returncode}',
                         'stderr': error_output,
                         'timestamp': datetime.now().isoformat()
                     }
-                }
-                await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+                })}\n\n".encode('utf-8'))
                 
         except Exception as e:
             # Send error event
-            data = {
+            await response.write(f"data: {json.dumps({
                 'event': 'search_error',
                 'data': {
                     'error': f'Scraping error: {str(e)}',
                     'timestamp': datetime.now().isoformat()
                 }
-            }
-            await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+            })}\n\n".encode('utf-8'))
             
             logger.error(f"❌ Profile search error: {e}")
     
@@ -516,14 +563,13 @@ class RealScrapingMCPProtocolServer:
         logger.info(f"👥 Starting REAL collaborator search for session: {session_id}")
         
         # Send search started event
-        data = {
+        await response.write(f"data: {json.dumps({
             'event': 'collaborator_search_started',
             'data': {'session_id': session_id, 'timestamp': datetime.now().isoformat()}
-        }
-        await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+        })}\n\n".encode('utf-8'))
         
         # Send connecting event
-        data = {
+        await response.write(f"data: {json.dumps({
             'event': 'progress_update',
             'data': {
                 'step': 1,
@@ -532,8 +578,7 @@ class RealScrapingMCPProtocolServer:
                 'progress': '25.0%',
                 'timestamp': datetime.now().isoformat()
             }
-        }
-        await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+        })}\n\n".encode('utf-8'))
         
         try:
             # First, read existing profiles to select one for collaborator search
@@ -541,14 +586,13 @@ class RealScrapingMCPProtocolServer:
             main_profile_path = session_dir / "main_profile.json"
             
             if not main_profile_path.exists():
-                data = {
+                await response.write(f"data: {json.dumps({
                     'event': 'search_error',
                     'data': {
                         'error': 'No main profile data found. Please run search_profile first.',
                         'timestamp': datetime.now().isoformat()
                     }
-                }
-                await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+                })}\n\n".encode('utf-8'))
                 return
             
             # Read profiles and select the first one for collaborator search
@@ -557,14 +601,13 @@ class RealScrapingMCPProtocolServer:
                 profiles = profile_data.get('profiles', [])
             
             if not profiles:
-                data = {
+                await response.write(f"data: {json.dumps({
                     'event': 'search_error',
                     'data': {
                         'error': 'No profiles found in main profile data.',
                         'timestamp': datetime.now().isoformat()
                     }
-                }
-                await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+                })}\n\n".encode('utf-8'))
                 return
             
             # Select profile based on user choice or default to first
@@ -580,7 +623,7 @@ class RealScrapingMCPProtocolServer:
             logger.info(f"🔍 Selected profile for collaborator search: {profile_name} (index: {profile_index})")
             
             # Send scraping started event
-            data = {
+            await response.write(f"data: {json.dumps({
                 'event': 'progress_update',
                 'data': {
                     'step': 2,
@@ -589,8 +632,7 @@ class RealScrapingMCPProtocolServer:
                     'progress': '50.0%',
                     'timestamp': datetime.now().isoformat()
                 }
-            }
-            await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+            })}\n\n".encode('utf-8'))
             await response.drain()
             
             # Run the actual collaborator scraping script
@@ -608,7 +650,7 @@ class RealScrapingMCPProtocolServer:
             )
             
             # Send scraping in progress event
-            data = {
+            await response.write(f"data: {json.dumps({
                 'event': 'progress_update',
                 'data': {
                     'step': 3,
@@ -617,8 +659,7 @@ class RealScrapingMCPProtocolServer:
                     'progress': '75.0%',
                     'timestamp': datetime.now().isoformat()
                 }
-            }
-            await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+            })}\n\n".encode('utf-8'))
             await response.drain()
             
             # Monitor the scraping process in real-time with file watching
@@ -686,14 +727,13 @@ class RealScrapingMCPProtocolServer:
                             logger.warning(f"⚠️  Error reading collaborators file: {e}")
                 
                 # Send heartbeat/progress update
-                data = {
+                await response.write(f"data: {json.dumps({
                     'event': 'scraping_progress',
                     'data': {
                         'message': 'Collaborator scraping in progress...',
                         'timestamp': datetime.now().isoformat()
                     }
-                }
-                await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+                })}\n\n".encode('utf-8'))
                 await response.drain()
                 
                 # Wait a bit before next update
@@ -717,7 +757,7 @@ class RealScrapingMCPProtocolServer:
                     total_collaborators = len(collaborators)
                     
                     # First send summary
-                    data = {
+                    await response.write(f"data: {json.dumps({
                         'event': 'collaborator_search_completed',
                         'data': {
                             'total_collaborators': total_collaborators,
@@ -726,8 +766,7 @@ class RealScrapingMCPProtocolServer:
                             'timestamp': datetime.now().isoformat(),
                             'message': f'Found {total_collaborators} collaborators for {profile_name}'
                         }
-                    }
-                    await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+                    })}\n\n".encode('utf-8'))
                     
                     # Send collaborators in smaller chunks (max 10 per chunk)
                     chunk_size = 10
@@ -751,64 +790,50 @@ class RealScrapingMCPProtocolServer:
                     logger.info(f"✅ Real collaborator search completed: {len(collaborators)} collaborators found for {profile_name}")
                 else:
                     # Send error if no results file
-                    data = {
+                    await response.write(f"data: {json.dumps({
                         'event': 'search_error',
                         'data': {
                             'error': 'No collaborators file found after scraping',
                             'timestamp': datetime.now().isoformat()
                         }
-                    }
-                    await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+                    })}\n\n".encode('utf-8'))
             else:
                 # Send error if scraping failed
                 error_output = stderr.decode('utf-8', errors='ignore')
-                data = {
+                await response.write(f"data: {json.dumps({
                     'event': 'search_error',
                     'data': {
                         'error': f'Collaborator scraping failed with return code {process.returncode}',
                         'stderr': error_output,
                         'timestamp': datetime.now().isoformat()
                     }
-                }
-                await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+                })}\n\n".encode('utf-8'))
                 
         except Exception as e:
             # Send error event
-            data = {
+            await response.write(f"data: {json.dumps({
                 'event': 'search_error',
                 'data': {
                     'error': f'Collaborator search error: {str(e)}',
                     'timestamp': datetime.now().isoformat()
                 }
-            }
-            await response.write(f"data: {json.dumps(data)}\n\n".encode('utf-8'))
+            })}\n\n".encode('utf-8'))
             
             logger.error(f"❌ Collaborator search error: {e}")
+    
+    async def handle_options(self, request):
+        """Handle CORS preflight requests"""
+        headers = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
+            'Access-Control-Max-Age': '3600'
+        }
+        return web.Response(headers=headers)
     
     async def handle_mcp_request(self, request):
         """Main MCP request handler"""
         try:
-            if request.method == "GET":
-                # GET request için MCP server capabilities döndür
-                return web.json_response({
-                    "jsonrpc": "2.0",
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {
-                            "tools": {
-                                "listChanged": False
-                            },
-                            "logging": {},
-                            "experimental": {}
-                        },
-                        "serverInfo": {
-                            "name": "YOK Academic MCP Real Scraping Server",
-                            "version": "3.0.0"
-                        },
-                        "instructions": "YÖK Academic research and collaboration analysis server"
-                    }
-                })
-            
             data = await request.json()
             method = data.get("method")
             
@@ -824,30 +849,6 @@ class RealScrapingMCPProtocolServer:
                     "id": data.get("id"),
                     "result": {}
                 })
-            elif method == "notifications/initialized":
-                # MCP notification - no response needed for notifications per JSON-RPC spec
-                logger.info("📡 Received notifications/initialized from client")
-                if data.get("id") is not None:
-                    # If there's an ID, it's a request not a notification
-                    return web.json_response({
-                        "jsonrpc": "2.0",
-                        "id": data.get("id"),
-                        "result": {}
-                    })
-                else:
-                    # True notification - no response
-                    return web.Response(status=204)  # No content
-            elif method.startswith("notifications/"):
-                # Handle other notifications
-                logger.info(f"📡 Received notification: {method}")
-                if data.get("id") is not None:
-                    return web.json_response({
-                        "jsonrpc": "2.0", 
-                        "id": data.get("id"),
-                        "result": {}
-                    })
-                else:
-                    return web.Response(status=204)
             else:
                 return web.json_response({
                     "jsonrpc": "2.0",
@@ -858,230 +859,119 @@ class RealScrapingMCPProtocolServer:
                     }
                 }, status=404)
                 
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parse error: {e}")
-            return web.json_response({
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {
-                    "code": -32700,
-                    "message": f"Parse error: {str(e)}"
-                }
-            }, status=400)
         except Exception as e:
             logger.error(f"MCP request error: {e}")
             return web.json_response({
                 "jsonrpc": "2.0",
                 "id": data.get("id") if 'data' in locals() else None,
                 "error": {
-                    "code": -32603,
-                    "message": f"Internal error: {str(e)}"
+                    "code": -32700,
+                    "message": f"Parse error: {str(e)}"
                 }
-            }, status=500)
+            }, status=400)
 
 def create_app():
-    """Create web application"""
-    # CORS middleware for Smithery compatibility
-    async def cors_middleware(app, handler):
-        async def middleware_handler(request):
-            # Handle OPTIONS preflight requests
-            if request.method == 'OPTIONS':
-                response = web.Response(status=200)
-            else:
-                try:
-                    response = await handler(request)
-                except web.HTTPException as e:
-                    # Re-raise HTTP exceptions (like 404)
-                    response = web.Response(status=e.status, text=str(e))
-                except Exception as e:
-                    # Handle any unhandled exceptions
-                    logger.error(f"Unhandled error: {e}")
-                    response = web.json_response({
-                        "jsonrpc": "2.0",
-                        "id": None,
-                        "error": {
-                            "code": -32603,
-                            "message": f"Internal error: {str(e)}"
-                        }
-                    }, status=500)
-            
-            # Add CORS headers
-            response.headers['Access-Control-Allow-Origin'] = '*'
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, mcp-session-id'
-            return response
-        
-        return middleware_handler
-    
-    app = web.Application(middlewares=[cors_middleware])
+    """Create web application with CORS and optimization"""
+    app = web.Application()
     mcp_server = RealScrapingMCPProtocolServer()
     
-    # MCP Protocol endpoint
+    # CORS setup
+    if CORS_ENABLED:
+        cors = cors_setup(app, defaults={
+            "*": ResourceOptions(
+                allow_credentials=True,
+                expose_headers="*",
+                allow_headers="*",
+                allow_methods="*"
+            )
+        })
+    
+    # MCP Protocol endpoints
     app.router.add_post("/mcp", mcp_server.handle_mcp_request)
     app.router.add_get("/mcp", mcp_server.handle_mcp_request)
+    app.router.add_options("/mcp", mcp_server.handle_options)
     
-    # Smithery tool endpoints
-    async def search_profile_handler(request):
-        """Handle search_profile tool requests"""
-        try:
-            data = await request.json()
-            name = data.get("name", "")
-            
-            if not name:
-                return web.json_response({
-                    "error": "Name parameter is required"
-                }, status=400)
-            
-            # Delegate to MCP adapter's search functionality
-            result = await mcp_server.adapter.search_profile(name)
-            return web.json_response(result)
-            
-        except Exception as e:
-            logger.error(f"Error in search_profile_handler: {e}")
-            return web.json_response({
-                "error": str(e)
-            }, status=500)
-    
-    async def get_session_status_handler(request):
-        """Handle get_session_status tool requests"""
-        try:
-            # Return current sessions status
-            sessions_info = {
-                "active_sessions": len(mcp_server.sessions),
-                "sessions": list(mcp_server.sessions.keys())
-            }
-            return web.json_response(sessions_info)
-            
-        except Exception as e:
-            logger.error(f"Error in get_session_status_handler: {e}")
-            return web.json_response({
-                "error": str(e)
-            }, status=500)
-    
-    async def get_collaborators_handler(request):
-        """Handle get_collaborators tool requests"""
-        try:
-            data = await request.json()
-            session_id = data.get("session_id", "")
-            
-            if not session_id:
-                return web.json_response({
-                    "error": "session_id parameter is required"
-                }, status=400)
-            
-            # Get collaborators for the session
-            result = await mcp_server.adapter.get_collaborators(session_id)
-            return web.json_response(result)
-            
-        except Exception as e:
-            logger.error(f"Error in get_collaborators_handler: {e}")
-            return web.json_response({
-                "error": str(e)
-            }, status=500)
-    
-    async def get_profile_handler(request):
-        """Handle get_profile tool requests"""
-        try:
-            data = await request.json()
-            profile_url = data.get("profile_url", "")
-            
-            if not profile_url:
-                return web.json_response({
-                    "error": "profile_url parameter is required"
-                }, status=400)
-            
-            # Get profile information
-            result = await mcp_server.adapter.get_profile(profile_url)
-            return web.json_response(result)
-            
-        except Exception as e:
-            logger.error(f"Error in get_profile_handler: {e}")
-            return web.json_response({
-                "error": str(e)
-            }, status=500)
-    
-    # MCP Config endpoint for Smithery discovery
-    async def mcp_config_handler(request):
-        """Handle .well-known/mcp-config requests"""
-        return web.json_response({
-            "mcpVersion": "2024-11-05",
-            "capabilities": {
-                "tools": {}
-            },
-            "serverInfo": {
-                "name": "YOK Academic MCP Real Scraping Server",
-                "version": "3.0.0"
-            },
-            "endpoints": {
-                "mcp": "/mcp"
-            }
-        })
-    
-    # Add tool endpoints
-    app.router.add_get("/.well-known/mcp-config", mcp_config_handler)
-    app.router.add_post("/search_profile", search_profile_handler)
-    app.router.add_get("/get_session_status", get_session_status_handler)
-    app.router.add_post("/get_collaborators", get_collaborators_handler)
-    app.router.add_post("/get_profile", get_profile_handler)
-    
-    # Root endpoint for MCP capabilities
-    async def root_handler(request):
-        """Root endpoint showing MCP capabilities"""
-        return web.json_response({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {
-                "tools": {}
-            },
-            "serverInfo": {
-                "name": "YOK Academic MCP Real Scraping Server",
-                "version": "3.0.0"
-            },
-            "instructions": "This is an MCP (Model Context Protocol) server for YÖK Academic research.",
-            "endpoints": {
-                "mcp": "/mcp",
-                "health": "/health",
-                "tools": ["/search_profile", "/get_session_status", "/get_collaborators", "/get_profile"]
-            }
-        })
-    
-    # Health check
+    # Health check endpoint
     async def health_check_handler(request):
         return web.json_response({
             "status": "ok",
             "service": "YOK Academic MCP Real Scraping Server",
             "version": "3.0.0",
             "protocol": "MCP 2024-11-05",
-            "features": ["Real-time streaming", "Real scraping integration", "Progress updates", "Event-driven responses"],
-            "endpoints": ["/mcp", "/search_profile", "/get_session_status", "/get_collaborators", "/get_profile", "/health"]
+            "environment": os.getenv("NODE_ENV", "development"),
+            "features": [
+                "Real-time streaming", 
+                "Real scraping integration", 
+                "Progress updates", 
+                "Event-driven responses",
+                "CORS enabled" if CORS_ENABLED else "CORS disabled",
+                f"Max concurrent sessions: {MAX_CONCURRENT_SESSIONS}"
+            ],
+            "active_sessions": len(mcp_server.sessions),
+            "active_streams": len(mcp_server.active_streams),
+            "timestamp": datetime.now().isoformat()
         })
     
-    app.router.add_get("/", root_handler)
     app.router.add_get("/health", health_check_handler)
+    
+    # Metrics endpoint for monitoring
+    async def metrics_handler(request):
+        return web.json_response({
+            "sessions": {
+                "total": len(mcp_server.sessions),
+                "active_streams": len(mcp_server.active_streams),
+                "max_concurrent": MAX_CONCURRENT_SESSIONS
+            },
+            "server": {
+                "uptime": datetime.now().isoformat(),
+                "version": "3.0.0",
+                "environment": os.getenv("NODE_ENV", "development")
+            }
+        })
+    
+    app.router.add_get("/metrics", metrics_handler)
+    
+    # Add CORS to all routes if enabled
+    if CORS_ENABLED:
+        for route in list(app.router.routes()):
+            cors.add(route)
     
     return app
 
 if __name__ == "__main__":
+    # Create logs directory if it doesn't exist
+    os.makedirs("logs", exist_ok=True)
+    
+    app = create_app()
+    logger.info("=" * 80)
+    logger.info("🎓 YÖK Akademik Asistanı - MCP Real Scraping Server v3.0.0")
+    logger.info("=" * 80)
+    logger.info(f"🌐 Server: http://{SERVER_HOST}:{SERVER_PORT}")
+    logger.info(f"🔧 MCP Endpoint: http://{SERVER_HOST}:{SERVER_PORT}/mcp")
+    logger.info(f"❤️  Health Check: http://{SERVER_HOST}:{SERVER_PORT}/health")
+    logger.info(f"📊 Metrics: http://{SERVER_HOST}:{SERVER_PORT}/metrics")
+    logger.info("=" * 80)
+    logger.info(f"🚀 Environment: {os.getenv('NODE_ENV', 'development')}")
+    logger.info(f"📡 Real-time streaming: {HEADLESS_MODE and 'Enabled' or 'Development Mode'}")
+    logger.info(f"🔒 CORS: {CORS_ENABLED and 'Enabled' or 'Disabled'}")
+    logger.info(f"👥 Max Sessions: {MAX_CONCURRENT_SESSIONS}")
+    logger.info(f"💓 Heartbeat: {SSE_HEARTBEAT_INTERVAL}s")
+    logger.info("=" * 80)
+    logger.info("✅ Server ready for MCP connections!")
+    logger.info("=" * 80)
+    
     try:
-        app = create_app()
-        # Ortam değişkeninden portu al, yoksa 8080 kullan (Smithery uyumluluğu için)
-        port = int(os.environ.get("PORT", 8080))
-        
-        logger.info("=" * 60)
-        logger.info("YÖK Akademik Asistanı - MCP Server")
-        logger.info("=" * 60)
-        logger.info(f"Server: http://0.0.0.0:{port}")
-        logger.info(f"MCP Endpoint: http://0.0.0.0:{port}/mcp")
-        logger.info(f"Health Check: http://0.0.0.0:{port}/health")
-        logger.info("=" * 60)
-        logger.info("🚀 MCP Server ready for Smithery!")
-        logger.info("📡 HTTP/JSON-RPC communication only")
-        logger.info("=" * 60)
-
-        # 0.0.0.0'a bind ederek container dışından erişimi sağla
-        web.run_app(app, host="0.0.0.0", port=port)
-        
+        web.run_app(
+            app, 
+            host=SERVER_HOST, 
+            port=SERVER_PORT,
+            access_log=logger,
+            shutdown_timeout=60,
+            keepalive_timeout=30,
+            client_timeout=60
+        )
+    except KeyboardInterrupt:
+        logger.info("🛑 Server stopped by user")
     except Exception as e:
-        logger.error(f"❌ Failed to start server: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Server error: {e}")
         sys.exit(1)

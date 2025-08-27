@@ -1,10 +1,8 @@
-# Python cache files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-
-# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -23,61 +21,7 @@ wheels/
 *.egg
 MANIFEST
 
-# PyInstaller
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pyenv
-.python-version
-
-# celery beat schedule file
-celerybeat-schedule
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
+# Virtual environments
 .env
 .venv
 env/
@@ -86,29 +30,40 @@ ENV/
 env.bak/
 venv.bak/
 
-# Spyder project settings
-.spyderproject
-.spyproject
+# Environment variables
+.env.local
+.env.production
+.env.development
+config.env.local
 
-# Rope project settings
-.ropeproject
+# Logs
+logs/
+*.log
+*.log.*
 
-# mkdocs documentation
-/site
+# Session data
+public/collaborator-sessions/*/
+!public/collaborator-sessions/.gitkeep
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
 
-# IDE files
+# Chrome/Browser
+.chrome/
+chromedriver*
+chrome-data/
+
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS generated files
+# OS
 .DS_Store
 .DS_Store?
 ._*
@@ -117,12 +72,38 @@ dmypy.json
 ehthumbs.db
 Thumbs.db
 
-# Project specific
-# Backups and logs
-*.backup
-logs/
-*.log
+# Docker
+.dockerignore
 
-# Generated session data (persist via volumes/cloud storage instead)
-public/collaborator-sessions/
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
 
+# Jupyter
+.ipynb_checkpoints
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST

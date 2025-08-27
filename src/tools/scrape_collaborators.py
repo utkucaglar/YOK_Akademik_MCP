@@ -139,11 +139,6 @@ collaborators_data = {
 options = webdriver.ChromeOptions()
 options.add_argument("--headless=new")
 options.add_argument("--disable-gpu")
-options.add_argument("--no-sandbox")
-options.add_argument("--disable-dev-shm-usage")
-options.add_argument("--disable-extensions")
-options.add_argument("--disable-software-rasterizer")
-options.add_argument("--remote-debugging-port=9222")
 options.add_argument("user-agent=Mozilla/5.0")
 prefs = {
     "profile.managed_default_content_settings.images": 2,
@@ -152,20 +147,8 @@ prefs = {
 }
 options.add_experimental_option("prefs", prefs)
 
-# Container/production için Chrome ve Chromedriver path override desteği
-chrome_binary_env = os.environ.get("CHROME_BINARY")
-if chrome_binary_env:
-    options.binary_location = chrome_binary_env
-
-chromedriver_path_env = os.environ.get("CHROMEDRIVER_PATH")
-if chromedriver_path_env and os.path.exists(chromedriver_path_env):
-    service = Service(chromedriver_path_env)
-else:
-    # Fallback: webdriver-manager (dev ortamı için uygun)
-    service = Service(ChromeDriverManager().install())
-
 driver = webdriver.Chrome(
-    service=service,
+    service=Service(ChromeDriverManager().install()),
     options=options
 )
 driver.set_window_size(1920, 1080)

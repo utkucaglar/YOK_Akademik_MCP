@@ -2,6 +2,8 @@
 
 Modern bir MCP (Model Context Protocol) sunucusu ile YÖK Akademik platformundan profilleri ve işbirlikçileri toplayan, gerçek zamanlı SSE (Server‑Sent Events) akışı veren, dosya tabanlı oturum yönetimi ve otomasyon içeren bir scraping ve orkestrasyon sistemi.
 
+> **🚀 Smithery Deployment Ready** - Bu proje Smithery platformunda deploy edilmeye hazır haldedir. Detaylı deployment rehberi için [DEPLOYMENT.md](DEPLOYMENT.md) dosyasına bakınız.
+
 ### Ana Özellikler
 - **MCP JSON‑RPC 2.0 sunucusu**: `aiohttp` tabanlı `/mcp` endpoint’i
 - **Gerçek zamanlı akış**: `/mcp/stream` ile SSE; polling yok
