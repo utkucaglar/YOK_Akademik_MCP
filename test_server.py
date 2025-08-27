@@ -89,8 +89,9 @@ async def test_endpoints():
             print()
 
 if __name__ == "__main__":
-    print("🚀 Starting MCP Server Test")
+    print("🚀 Starting Simple MCP Server Test")
     print("Make sure your server is running on localhost:8081")
+    print("Run with: python src/simple_server.py")
     print()
     
     asyncio.run(test_endpoints())

@@ -38,7 +38,7 @@ ENV PORT=8081
 # Reset the entrypoint, don't invoke `uv`
 ENTRYPOINT []
 
-# Run the MCP server in HTTP mode
-CMD ["python", "src/main.py"]
+# Add startup verification and run the simple MCP server
+CMD ["sh", "-c", "echo '🚀 Container starting...' && python src/simple_server.py"]
 
 
