@@ -38,7 +38,7 @@ environment:
 
 # MCP server configuration
 mcp:
-  protocol_version: "2024-11-05"
+  protocol_version: "2025-03-26"
   capabilities:
     tools: true
     logging: true

@@ -89,19 +89,27 @@ class RealScrapingMCPProtocolServer:
         return f"session_{timestamp}_{milliseconds:03d}"
     
     async def handle_initialize(self, request):
-        """MCP initialize endpoint"""
+        """MCP initialize endpoint - MCP 2025-03-26 Streamable HTTP compatible"""
         try:
-            # Handle both GET and POST requests
+            # Handle both GET and POST requests as per new spec
             if request.method == "GET":
-                # Simple status for GET requests
-                return web.json_response({
-                    "status": "ready",
-                    "service": "YOK Academic MCP Server",
-                    "version": "3.0.0",
-                    "protocol": "MCP 2024-11-05"
-                })
+                # GET should support listening for server messages (SSE stream)
+                return await self.handle_sse_stream(request)
             
             data = await request.json()
+            method = data.get("method")
+            
+            # Only handle initialize method here
+            if method != "initialize":
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": data.get("id"),
+                    "error": {
+                        "code": -32601,
+                        "message": f"Method not found in initialize handler: {method}"
+                    }
+                }, status=404)
+            
             session_id = self.generate_session_id()
             
             # Session'ı kaydet
@@ -112,11 +120,12 @@ class RealScrapingMCPProtocolServer:
                 "status": "initialized"
             }
             
+            # MCP 2025-03-26 uyumlu response
             response = {
                 "jsonrpc": "2.0",
                 "id": data.get("id"),
                 "result": {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": "2025-03-26",
                     "capabilities": {
                         "tools": {},
                         "logging": {},
@@ -129,16 +138,17 @@ class RealScrapingMCPProtocolServer:
                 }
             }
             
-            # Session ID'yi header'a ekle
+            # Session ID'yi Mcp-Session-Id header'ına ekle (yeni spec)
             headers = {
-                'mcp-session-id': session_id,
+                'Mcp-Session-Id': session_id,
                 'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
-                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+                'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id, Last-Event-ID',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
+                'Access-Control-Expose-Headers': 'Mcp-Session-Id'
             }
             
             resp = web.json_response(response, headers=headers)
-            logger.info(f"✅ Session initialized: {session_id}")
+            logger.info(f"✅ MCP Session initialized: {session_id}")
             return resp
             
         except Exception as e:
@@ -153,15 +163,64 @@ class RealScrapingMCPProtocolServer:
             }
             return web.json_response(error_response, status=500, headers={
                 'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
-                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+                'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE'
             })
+    
+    async def handle_sse_stream(self, request):
+        """Handle SSE stream for server-to-client messages - MCP 2025-03-26"""
+        session_id = request.headers.get('Mcp-Session-Id')
+        last_event_id = request.headers.get('Last-Event-ID')
+        
+        logger.info(f"📡 SSE Stream requested - Session: {session_id}, Last-Event-ID: {last_event_id}")
+        
+        # Create SSE response
+        response = web.StreamResponse(
+            status=200,
+            reason='OK',
+            headers={
+                'Content-Type': 'text/event-stream; charset=utf-8',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id, Last-Event-ID',
+                'Access-Control-Expose-Headers': 'Mcp-Session-Id',
+                'X-Accel-Buffering': 'no'
+            }
+        )
+        await response.prepare(request)
+        
+        # Store stream for session
+        if session_id:
+            self.active_streams[session_id] = response
+        
+        try:
+            # Send initial heartbeat
+            await response.write(b": heartbeat\n\n")
+            await response.drain()
+            
+            # Keep connection alive with periodic heartbeats
+            while session_id in self.active_streams:
+                await asyncio.sleep(SSE_HEARTBEAT_INTERVAL)
+                if session_id in self.active_streams:
+                    await response.write(b": heartbeat\n\n")
+                    await response.drain()
+                    
+        except asyncio.CancelledError:
+            logger.info(f"SSE stream cancelled for session: {session_id}")
+        except Exception as e:
+            logger.error(f"SSE stream error: {e}")
+        finally:
+            if session_id and session_id in self.active_streams:
+                del self.active_streams[session_id]
+        
+        return response
     
     async def handle_tools_list(self, request):
         """MCP tools/list endpoint"""
         try:
             data = await request.json()
-            session_id = request.headers.get('mcp-session-id')
+            session_id = request.headers.get('Mcp-Session-Id')
             
             if not session_id or session_id not in self.sessions:
                 return web.json_response({
@@ -852,15 +911,31 @@ class RealScrapingMCPProtocolServer:
         return web.Response(headers=headers)
     
     async def handle_mcp_request(self, request):
-        """Main MCP request handler"""
+        """Main MCP request handler - MCP 2025-03-26 Streamable HTTP"""
         try:
-            # Handle GET requests for status
+            # Handle GET requests for SSE stream
             if request.method == "GET":
-                return await self.handle_initialize(request)
+                return await self.handle_sse_stream(request)
+            
+            # Handle DELETE requests for session termination
+            if request.method == "DELETE":
+                return await self.handle_session_delete(request)
             
             # Handle OPTIONS requests for CORS
             if request.method == "OPTIONS":
                 return await self.handle_options(request)
+            
+            # Validate Content-Type for POST requests
+            content_type = request.headers.get('Content-Type', '')
+            if request.method == "POST" and not content_type.startswith('application/json'):
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32700,
+                        "message": "Content-Type must be application/json"
+                    }
+                }, status=400)
             
             # Parse JSON for POST requests
             try:
@@ -876,29 +951,40 @@ class RealScrapingMCPProtocolServer:
                     }
                 }, status=400, headers={
                     'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
-                    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+                    'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id',
+                    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE'
                 })
             
+            # Handle batch requests (array of requests)
+            if isinstance(data, list):
+                return await self.handle_batch_request(request, data)
+            
+            # Single request handling
             method = data.get("method")
-            logger.info(f"📨 MCP Request: {method}")
+            session_id = request.headers.get('Mcp-Session-Id')
+            
+            logger.info(f"📨 MCP Request: {method} (Session: {session_id})")
+            
+            # Check if streaming request contains JSON-RPC requests
+            accept_header = request.headers.get('Accept', '')
+            wants_streaming = 'text/event-stream' in accept_header
             
             if method == "initialize":
                 return await self.handle_initialize(request)
             elif method == "tools/list":
                 return await self.handle_tools_list(request)
             elif method == "tools/call":
-                return await self.handle_tools_call(request)
+                # Tools/call should support streaming response
+                if wants_streaming:
+                    return await self.handle_streaming_tools_call(request, data, session_id)
+                else:
+                    return await self.handle_tools_call(request)
             elif method == "logging/setLevel":
                 return web.json_response({
                     "jsonrpc": "2.0",
                     "id": data.get("id"),
                     "result": {}
-                }, headers={
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
-                    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
-                })
+                }, headers=self.get_cors_headers())
             else:
                 return web.json_response({
                     "jsonrpc": "2.0",
@@ -907,11 +993,7 @@ class RealScrapingMCPProtocolServer:
                         "code": -32601,
                         "message": f"Method not found: {method}"
                     }
-                }, status=404, headers={
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
-                    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
-                })
+                }, status=404, headers=self.get_cors_headers())
                 
         except Exception as e:
             logger.error(f"MCP request error: {e}")
@@ -924,11 +1006,137 @@ class RealScrapingMCPProtocolServer:
                     "code": -32603,
                     "message": f"Internal error: {str(e)}"
                 }
-            }, status=500, headers={
+            }, status=500, headers=self.get_cors_headers())
+    
+    def get_cors_headers(self):
+        """Get standard CORS headers for MCP 2025-03-26"""
+        return {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id, Last-Event-ID',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
+            'Access-Control-Expose-Headers': 'Mcp-Session-Id'
+        }
+    
+    async def handle_session_delete(self, request):
+        """Handle session termination - MCP 2025-03-26"""
+        session_id = request.headers.get('Mcp-Session-Id')
+        
+        if not session_id:
+            return web.json_response({
+                "error": "Mcp-Session-Id header required"
+            }, status=400, headers=self.get_cors_headers())
+        
+        # Remove session
+        if session_id in self.sessions:
+            del self.sessions[session_id]
+        
+        # Close any active streams
+        if session_id in self.active_streams:
+            del self.active_streams[session_id]
+        
+        logger.info(f"🗑️ Session terminated: {session_id}")
+        return web.Response(status=204, headers=self.get_cors_headers())
+    
+    async def handle_batch_request(self, request, data_array):
+        """Handle batch JSON-RPC requests - MCP 2025-03-26"""
+        responses = []
+        
+        for item in data_array:
+            if not isinstance(item, dict):
+                continue
+                
+            method = item.get("method")
+            if method == "initialize":
+                resp = await self.handle_initialize(request)
+            elif method == "tools/list":
+                resp = await self.handle_tools_list(request)
+            elif method == "tools/call":
+                resp = await self.handle_tools_call(request)
+            else:
+                responses.append({
+                    "jsonrpc": "2.0",
+                    "id": item.get("id"),
+                    "error": {
+                        "code": -32601,
+                        "message": f"Method not found: {method}"
+                    }
+                })
+                continue
+            
+            if hasattr(resp, 'body'):
+                # Extract JSON from response
+                try:
+                    body_text = resp.body.decode('utf-8')
+                    responses.append(json.loads(body_text))
+                except:
+                    responses.append({
+                        "jsonrpc": "2.0",
+                        "id": item.get("id"),
+                        "error": {"code": -32603, "message": "Response parse error"}
+                    })
+        
+        return web.json_response(responses, headers=self.get_cors_headers())
+    
+    async def handle_streaming_tools_call(self, request, data, session_id):
+        """Handle streaming tools/call with SSE response - MCP 2025-03-26"""
+        tool_name = data.get("params", {}).get("name")
+        arguments = data.get("params", {}).get("arguments", {})
+        
+        logger.info(f"🔧 Streaming tool call: {tool_name}")
+        
+        # Create SSE response
+        response = web.StreamResponse(
+            status=200,
+            reason='OK',
+            headers={
+                'Content-Type': 'text/event-stream; charset=utf-8',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Connection': 'keep-alive',
                 'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
-                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
-            })
+                'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id, Last-Event-ID',
+                'Access-Control-Expose-Headers': 'Mcp-Session-Id',
+                'X-Accel-Buffering': 'no'
+            }
+        )
+        await response.prepare(request)
+        
+        try:
+            # Send streaming response for tool execution
+            await self.stream_tool_execution(response, tool_name, arguments, session_id)
+            
+            # Send final JSON-RPC response
+            final_response = {
+                "jsonrpc": "2.0",
+                "id": data.get("id"),
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Tool {tool_name} completed successfully"
+                        }
+                    ]
+                }
+            }
+            
+            event_data = json.dumps(final_response, ensure_ascii=False, separators=(',', ':'))
+            await response.write(f"data: {event_data}\n\n".encode('utf-8'))
+            await response.drain()
+            
+        except Exception as e:
+            logger.error(f"Streaming tool call error: {e}")
+            error_response = {
+                "jsonrpc": "2.0",
+                "id": data.get("id"),
+                "error": {
+                    "code": -32603,
+                    "message": f"Tool execution error: {str(e)}"
+                }
+            }
+            event_data = json.dumps(error_response)
+            await response.write(f"data: {event_data}\n\n".encode('utf-8'))
+            await response.drain()
+        
+        return response
 
 async def cors_middleware(request, handler):
     """CORS middleware for all requests"""
@@ -964,10 +1172,11 @@ def create_app():
     app = web.Application(middlewares=middlewares)
     mcp_server = RealScrapingMCPProtocolServer()
     
-    # MCP Protocol endpoints
+    # MCP Protocol endpoints - Single endpoint for all methods (MCP 2025-03-26)
     app.router.add_post("/mcp", mcp_server.handle_mcp_request)
     app.router.add_get("/mcp", mcp_server.handle_mcp_request)
     app.router.add_options("/mcp", mcp_server.handle_mcp_request)
+    app.router.add_delete("/mcp", mcp_server.handle_mcp_request)
     
     # Health check endpoint
     async def health_check_handler(request):
@@ -1022,7 +1231,7 @@ def create_app():
                     "id": 1,
                     "method": "initialize",
                     "params": {
-                        "protocolVersion": "2024-11-05",
+                        "protocolVersion": "2025-03-26",
                         "capabilities": {"tools": {}},
                         "clientInfo": {"name": "TestClient", "version": "1.0.0"}
                     }
