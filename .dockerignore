@@ -2,9 +2,9 @@
 .git
 .gitignore
 
-# Documentation
+# Documentation (keep smithery.yaml)
 README.md
-*.md
+SMITHERY_DEPLOYMENT_ANALYSIS.md
 
 # IDE
 .vscode

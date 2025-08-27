@@ -10,12 +10,14 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
+# Copy requirements and install Python dependencies first (for better layer caching)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project files
-COPY . /app
+# Copy only necessary project files
+COPY src/ ./src/
+COPY smithery.yaml .
+COPY mcp_adapter.py .
 
 # Create necessary directories
 RUN mkdir -p public/collaborator-sessions
@@ -32,10 +34,9 @@ EXPOSE 8081
 # Set default PORT for Smithery compatibility
 ENV PORT=8081
 
-# Reset the entrypoint, don't invoke `uv`
-ENTRYPOINT []
+# No custom entrypoint needed
 
-# Add startup verification and run the simple MCP server
-CMD ["sh", "-c", "echo '🚀 Container starting...' && python src/simple_server.py"]
+# Run the simple MCP server directly
+CMD ["python", "src/simple_server.py"]
 
 

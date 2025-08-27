@@ -119,7 +119,7 @@ class SimpleAdapter:
 
 # Use simple adapter
 adapter = SimpleAdapter()
-logger.info("✅ Loaded SimpleAdapter for Smithery compatibility")
+logger.info("Loaded SimpleAdapter for Smithery compatibility")
 
 def create_app():
     """Create ASGI app manually"""
@@ -148,7 +148,7 @@ def create_app():
         path = scope["path"]
         method = scope["method"]
         
-        logger.info(f"📡 {method} {path}")
+        logger.info(f"{method} {path}")
         
         # Route handling
         if path == "/" and method == "GET":
@@ -228,7 +228,7 @@ async def handle_mcp(scope, receive, send):
             data = {}
         
         json_rpc_method = data.get("method", "")
-        logger.info(f"🔧 MCP Method: {json_rpc_method}")
+        logger.info(f"MCP Method: {json_rpc_method}")
         
         if json_rpc_method == "initialize":
             response_data = {
@@ -321,7 +321,7 @@ async def handle_mcp(scope, receive, send):
         await send_json_response(send, response_data)
         
     except Exception as e:
-        logger.error(f"❌ MCP Error: {e}")
+                        logger.error(f"MCP Error: {e}")
         error_response = {
             "jsonrpc": "2.0",
             "id": data.get("id") if 'data' in locals() else None,
@@ -360,11 +360,11 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8081))
     
     logger.info("=" * 60)
-    logger.info("🚀 YÖK Academic MCP Server - Simple Implementation")
+    logger.info("YOK Academic MCP Server - Simple Implementation")
     logger.info("=" * 60)
-    logger.info(f"📡 Starting on 0.0.0.0:{port}")
-    logger.info(f"🔧 MCP endpoint: http://0.0.0.0:{port}/mcp")
-    logger.info(f"❤️  Health check: http://0.0.0.0:{port}/health")
+    logger.info(f"Starting on 0.0.0.0:{port}")
+    logger.info(f"MCP endpoint: http://0.0.0.0:{port}/mcp")
+    logger.info(f"Health check: http://0.0.0.0:{port}/health")
     logger.info("=" * 60)
     
     # Create and run the app
@@ -379,7 +379,7 @@ if __name__ == "__main__":
             access_log=True
         )
     except Exception as e:
-        logger.error(f"❌ Server failed to start: {e}")
+        logger.error(f"Server failed to start: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
