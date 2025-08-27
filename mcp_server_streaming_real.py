@@ -893,26 +893,41 @@ def create_app():
     
     # Health check endpoint
     async def health_check_handler(request):
-        return web.json_response({
-            "status": "ok",
-            "service": "YOK Academic MCP Real Scraping Server",
-            "version": "3.0.0",
-            "protocol": "MCP 2024-11-05",
-            "environment": os.getenv("NODE_ENV", "development"),
-            "features": [
-                "Real-time streaming", 
-                "Real scraping integration", 
-                "Progress updates", 
-                "Event-driven responses",
-                "CORS enabled" if CORS_ENABLED else "CORS disabled",
-                f"Max concurrent sessions: {MAX_CONCURRENT_SESSIONS}"
-            ],
-            "active_sessions": len(mcp_server.sessions),
-            "active_streams": len(mcp_server.active_streams),
-            "timestamp": datetime.now().isoformat()
-        })
+        try:
+            return web.json_response({
+                "status": "ok",
+                "service": "YOK Academic MCP Real Scraping Server",
+                "version": "3.0.0",
+                "protocol": "MCP 2024-11-05",
+                "environment": os.getenv("NODE_ENV", "development"),
+                "features": [
+                    "Real-time streaming", 
+                    "Real scraping integration", 
+                    "Progress updates", 
+                    "Event-driven responses",
+                    "CORS enabled" if CORS_ENABLED else "CORS disabled",
+                    f"Max concurrent sessions: {MAX_CONCURRENT_SESSIONS}"
+                ],
+                "active_sessions": len(mcp_server.sessions),
+                "active_streams": len(mcp_server.active_streams),
+                "timestamp": datetime.now().isoformat()
+            })
+        except Exception as e:
+            logger.error(f"Health check error: {e}")
+            return web.json_response({
+                "status": "error",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }, status=500)
     
     app.router.add_get("/health", health_check_handler)
+    
+    # Simple ready check for Smithery
+    async def ready_handler(request):
+        return web.Response(text="OK", status=200)
+    
+    app.router.add_get("/ready", ready_handler)
+    app.router.add_get("/", ready_handler)  # Root endpoint
     
     # Metrics endpoint for monitoring
     async def metrics_handler(request):
@@ -939,39 +954,46 @@ def create_app():
     return app
 
 if __name__ == "__main__":
-    # Create logs directory if it doesn't exist
-    os.makedirs("logs", exist_ok=True)
-    
-    app = create_app()
-    logger.info("=" * 80)
-    logger.info("🎓 YÖK Akademik Asistanı - MCP Real Scraping Server v3.0.0")
-    logger.info("=" * 80)
-    logger.info(f"🌐 Server: http://{SERVER_HOST}:{SERVER_PORT}")
-    logger.info(f"🔧 MCP Endpoint: http://{SERVER_HOST}:{SERVER_PORT}/mcp")
-    logger.info(f"❤️  Health Check: http://{SERVER_HOST}:{SERVER_PORT}/health")
-    logger.info(f"📊 Metrics: http://{SERVER_HOST}:{SERVER_PORT}/metrics")
-    logger.info("=" * 80)
-    logger.info(f"🚀 Environment: {os.getenv('NODE_ENV', 'development')}")
-    logger.info(f"📡 Real-time streaming: {HEADLESS_MODE and 'Enabled' or 'Development Mode'}")
-    logger.info(f"🔒 CORS: {CORS_ENABLED and 'Enabled' or 'Disabled'}")
-    logger.info(f"👥 Max Sessions: {MAX_CONCURRENT_SESSIONS}")
-    logger.info(f"💓 Heartbeat: {SSE_HEARTBEAT_INTERVAL}s")
-    logger.info("=" * 80)
-    logger.info("✅ Server ready for MCP connections!")
-    logger.info("=" * 80)
-    
     try:
+        # Create logs directory if it doesn't exist
+        os.makedirs("logs", exist_ok=True)
+        
+        # Test Chrome availability early
+        chrome_bin = os.getenv("CHROME_BIN", "/usr/bin/chromium")
+        if not os.path.exists(chrome_bin):
+            logger.warning(f"Chrome binary not found at {chrome_bin}")
+        
+        app = create_app()
+        logger.info("=" * 80)
+        logger.info("🎓 YÖK Akademik Asistanı - MCP Real Scraping Server v3.0.0")
+        logger.info("=" * 80)
+        logger.info(f"🌐 Server: http://{SERVER_HOST}:{SERVER_PORT}")
+        logger.info(f"🔧 MCP Endpoint: http://{SERVER_HOST}:{SERVER_PORT}/mcp")
+        logger.info(f"❤️  Health Check: http://{SERVER_HOST}:{SERVER_PORT}/ready")
+        logger.info(f"📊 Metrics: http://{SERVER_HOST}:{SERVER_PORT}/metrics")
+        logger.info("=" * 80)
+        logger.info(f"🚀 Environment: {os.getenv('NODE_ENV', 'development')}")
+        logger.info(f"📡 Real-time streaming: {HEADLESS_MODE and 'Enabled' or 'Development Mode'}")
+        logger.info(f"🔒 CORS: {CORS_ENABLED and 'Enabled' or 'Disabled'}")
+        logger.info(f"👥 Max Sessions: {MAX_CONCURRENT_SESSIONS}")
+        logger.info(f"💓 Heartbeat: {SSE_HEARTBEAT_INTERVAL}s")
+        logger.info(f"🌍 Chrome: {chrome_bin}")
+        logger.info("=" * 80)
+        logger.info("✅ Server starting...")
+        
         web.run_app(
             app, 
             host=SERVER_HOST, 
             port=SERVER_PORT,
             access_log=logger,
-            shutdown_timeout=60,
-            keepalive_timeout=30,
-            client_timeout=60
+            shutdown_timeout=30,
+            keepalive_timeout=15,
+            client_timeout=30
         )
     except KeyboardInterrupt:
         logger.info("🛑 Server stopped by user")
     except Exception as e:
-        logger.error(f"❌ Server error: {e}")
+        logger.error(f"❌ Server startup error: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)

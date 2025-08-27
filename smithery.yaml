@@ -20,9 +20,9 @@ build:
   
 # Health check configuration
 health:
-  path: "/health"
+  path: "/ready"
   interval: 30
-  timeout: 10
+  timeout: 15
 
 # Environment variables
 environment:
@@ -126,15 +126,17 @@ dependencies:
     required: true
 
 # Startup command
-start_command: "python mcp_server_streaming_real.py"
+start_command: "python -u mcp_server_streaming_real.py"
 
 # Readiness and liveness probes
 probes:
   readiness:
-    path: "/health"
-    initial_delay: 30
+    path: "/ready"
+    initial_delay: 10
     period: 10
+    timeout: 5
   liveness:
-    path: "/health"
-    initial_delay: 60
-    period: 30
+    path: "/ready"
+    initial_delay: 30
+    period: 15
+    timeout: 10

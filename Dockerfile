@@ -59,8 +59,8 @@ USER appuser
 EXPOSE 5000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=15s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:5000/ready || exit 1
 
 # Start command
 CMD ["python", "mcp_server_streaming_real.py"]
