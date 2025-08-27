@@ -194,35 +194,83 @@ def get_profile(profile_url: str) -> str:
     
     return json.dumps(result, indent=2, ensure_ascii=False)
 
+# Add health check endpoint to FastMCP app
+from starlette.responses import JSONResponse
+
+def add_health_endpoint(app):
+    """Add health check endpoint to the FastMCP app"""
+    from starlette.routing import Route
+    
+    async def health_check(request):
+        return JSONResponse({
+            "status": "healthy",
+            "service": "YOK Academic MCP Server",
+            "version": "3.0.0",
+            "protocol": "MCP 2024-11-05",
+            "endpoints": {
+                "mcp": "/mcp",
+                "health": "/health"
+            }
+        })
+    
+    # Add the health route
+    health_route = Route("/health", health_check, methods=["GET"])
+    app.routes.append(health_route)
+    
+    return app
+
 def main():
     transport_mode = os.getenv("TRANSPORT", "stdio")
     
     if transport_mode == "http":
         # HTTP mode with config extraction from URL parameters
-        logger.info("YÖK Academic MCP Server starting in HTTP mode...")
+        logger.info("=" * 60)
+        logger.info("YÖK Academic MCP Server - FastMCP Implementation")
+        logger.info("=" * 60)
+        logger.info("🚀 Starting in HTTP mode...")
         
-        # Setup Starlette app with CORS for cross-origin requests
-        app = mcp.streamable_http_app()
-        
-        # IMPORTANT: add CORS middleware for browser based clients
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["GET", "POST", "OPTIONS"],
-            allow_headers=["*"],
-            expose_headers=["mcp-session-id", "mcp-protocol-version"],
-            max_age=86400,
-        )
+        try:
+            # Setup Starlette app with CORS for cross-origin requests
+            app = mcp.streamable_http_app()
+            
+            # Add health check endpoint
+            app = add_health_endpoint(app)
+            
+            # IMPORTANT: add CORS middleware for browser based clients
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_credentials=True,
+                allow_methods=["GET", "POST", "OPTIONS"],
+                allow_headers=["*"],
+                expose_headers=["mcp-session-id", "mcp-protocol-version"],
+                max_age=86400,
+            )
 
-        # Apply custom middleware for config extraction (per-request API key handling)
-        app = SmitheryConfigMiddleware(app)
+            # Apply custom middleware for config extraction (per-request API key handling)
+            app = SmitheryConfigMiddleware(app)
 
-        # Use Smithery-required PORT environment variable
-        port = int(os.environ.get("PORT", 8081))
-        logger.info(f"Listening on port {port}")
+            # Use Smithery-required PORT environment variable (default 8081)
+            port = int(os.environ.get("PORT", 8081))
+            
+            logger.info(f"📡 Server starting on 0.0.0.0:{port}")
+            logger.info(f"🔧 MCP endpoint: http://0.0.0.0:{port}/mcp")
+            logger.info(f"❤️  Health check: http://0.0.0.0:{port}/health")
+            logger.info("=" * 60)
 
-        uvicorn.run(app, host="0.0.0.0", port=port, log_level="debug")
+            uvicorn.run(
+                app, 
+                host="0.0.0.0", 
+                port=port, 
+                log_level="info",
+                access_log=True
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to start HTTP server: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
     
     else:
         # Optional: add stdio transport for backwards compatibility

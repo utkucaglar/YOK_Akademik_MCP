@@ -29,6 +29,12 @@ ENV PATH="/app/.venv/bin:$PATH"
 # Set transport mode to HTTP for container deployment
 ENV TRANSPORT=http
 
+# Expose port 8081 for Smithery
+EXPOSE 8081
+
+# Set default PORT for Smithery compatibility
+ENV PORT=8081
+
 # Reset the entrypoint, don't invoke `uv`
 ENTRYPOINT []
 
