@@ -1,34 +1,38 @@
-# 1. Temel imaj olarak resmi Python imajını kullan
-FROM python:3.11-slim
+# Use a Python image with uv pre-installed
+FROM ghcr.io/astral-sh/uv:python3.12-alpine
 
-# 2. Gerekli sistem bağımlılıkları (sadece HTTP server için)
-RUN apt-get update && apt-get install -y \
-    curl \
-    ca-certificates \
-    --no-install-recommends && rm -rf /var/lib/apt/lists/*
-
-# 3. Ortam değişkenleri
-ENV PIP_NO_CACHE_DIR=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
-
-# 4. Çalışma dizini oluştur ve ayarla
+# Install the project into `/app`
 WORKDIR /app
 
-# 5. Bağımlılıkları kopyala ve kur
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Enable bytecode compilation
+ENV UV_COMPILE_BYTECODE=1
 
-# 6. Uygulama kodunun tamamını kopyala
-COPY . .
+# Copy from the cache instead of linking since it's a mounted volume
+ENV UV_LINK_MODE=copy
 
-# 7. Gerekli dizinleri oluştur
+# Copy project configuration
+COPY pyproject.toml .
+
+# Install dependencies using the lockfile if available
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev || uv sync --no-dev
+
+# Copy project files
+COPY . /app
+
+# Create necessary directories
 RUN mkdir -p public/collaborator-sessions
 
-# 8. Uygulamanın çalışacağı portu belirt
-EXPOSE 8080
+# Place executables in the environment at the front of the path
+ENV PATH="/app/.venv/bin:$PATH"
 
-# 9. Python ile uygulamayı başlat
-CMD ["python", "mcp_server_streaming_real.py"]
+# Set transport mode to HTTP for container deployment
+ENV TRANSPORT=http
+
+# Reset the entrypoint, don't invoke `uv`
+ENTRYPOINT []
+
+# Run the MCP server in HTTP mode
+CMD ["python", "src/main.py"]
 
 
