@@ -1,21 +1,18 @@
-# Use a Python image with uv pre-installed
-FROM ghcr.io/astral-sh/uv:python3.12-alpine
+# Use standard Python image
+FROM python:3.11-slim
 
 # Install the project into `/app`
 WORKDIR /app
 
-# Enable bytecode compilation
-ENV UV_COMPILE_BYTECODE=1
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
-# Copy from the cache instead of linking since it's a mounted volume
-ENV UV_LINK_MODE=copy
-
-# Copy project configuration
-COPY pyproject.toml .
-
-# Install dependencies using the lockfile if available
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-dev || uv sync --no-dev
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy project files
 COPY . /app
@@ -23,8 +20,8 @@ COPY . /app
 # Create necessary directories
 RUN mkdir -p public/collaborator-sessions
 
-# Place executables in the environment at the front of the path
-ENV PATH="/app/.venv/bin:$PATH"
+# Set Python path
+ENV PYTHONPATH="/app"
 
 # Set transport mode to HTTP for container deployment
 ENV TRANSPORT=http
