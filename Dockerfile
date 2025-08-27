@@ -9,31 +9,28 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Google Chrome
-RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable \
+# Install Chromium and ChromeDriver (Debian packages - more reliable)
+RUN apt-get update \
+    && apt-get install -y \
+        chromium \
+        chromium-driver \
     && rm -rf /var/lib/apt/lists/*
 
-# Install ChromeDriver
-RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | awk -F'.' '{print $1}') \
-    && DRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_VERSION}") \
-    && wget -O /tmp/chromedriver.zip "https://chromedriver.storage.googleapis.com/${DRIVER_VERSION}/chromedriver_linux64.zip" \
-    && unzip /tmp/chromedriver.zip -d /tmp/ \
-    && mv /tmp/chromedriver /usr/local/bin/chromedriver \
-    && chmod +x /usr/local/bin/chromedriver \
-    && rm /tmp/chromedriver.zip
+# Create symlinks for compatibility
+RUN ln -sf /usr/bin/chromium /usr/bin/google-chrome \
+    && ln -sf /usr/bin/chromedriver /usr/local/bin/chromedriver
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV CHROME_BIN=/usr/bin/google-chrome
-ENV CHROME_DRIVER_PATH=/usr/local/bin/chromedriver
+ENV CHROME_BIN=/usr/bin/chromium
+ENV CHROME_DRIVER_PATH=/usr/bin/chromedriver
 ENV HEADLESS_MODE=true
 ENV MCP_SERVER_HOST=0.0.0.0
 ENV MCP_SERVER_PORT=5000
 ENV NODE_ENV=production
 ENV PYTHON_ENV=production
+ENV CHROME_NO_SANDBOX=true
+ENV CHROME_DISABLE_DEV_SHM=true
 
 # Create app directory
 WORKDIR /app

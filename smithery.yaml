@@ -31,8 +31,10 @@ environment:
   MCP_SERVER_PORT: 5000
   MCP_SERVER_HOST: "0.0.0.0"
   HEADLESS_MODE: "true"
-  CHROME_BIN: "/usr/bin/google-chrome"
-  CHROME_DRIVER_PATH: "/usr/local/bin/chromedriver"
+  CHROME_BIN: "/usr/bin/chromium"
+  CHROME_DRIVER_PATH: "/usr/bin/chromedriver"
+  CHROME_NO_SANDBOX: "true"
+  CHROME_DISABLE_DEV_SHM: "true"
 
 # MCP server configuration
 mcp:
@@ -116,10 +118,10 @@ persistence:
 
 # Dependencies
 dependencies:
-  - name: "chrome"
+  - name: "chromium"
     version: "latest"
     required: true
-  - name: "chromedriver"
+  - name: "chromium-driver"
     version: "latest"
     required: true
 

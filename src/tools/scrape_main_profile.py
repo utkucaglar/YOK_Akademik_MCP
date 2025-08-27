@@ -108,6 +108,11 @@ DEFAULT_PHOTO_URL = "/default_photo.jpg"
 options = webdriver.ChromeOptions()
 options.add_argument("--headless=new")
 options.add_argument("--disable-gpu")
+options.add_argument("--no-sandbox")
+options.add_argument("--disable-dev-shm-usage")
+options.add_argument("--disable-extensions")
+options.add_argument("--disable-plugins")
+options.add_argument("--disable-images")
 options.add_argument("user-agent=Mozilla/5.0")
 prefs = {
     "profile.managed_default_content_settings.images": 2,
@@ -115,6 +120,11 @@ prefs = {
     "profile.managed_default_content_settings.fonts": 2,
 }
 options.add_experimental_option("prefs", prefs)
+
+# Set Chrome binary path from environment
+chrome_bin = os.getenv("CHROME_BIN", "/usr/bin/chromium")
+if chrome_bin:
+    options.binary_location = chrome_bin
 
 print("[DEBUG] WebDriver başlatılıyor...", flush=True)
 driver = webdriver.Chrome(
