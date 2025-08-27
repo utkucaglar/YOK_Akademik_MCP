@@ -47,8 +47,13 @@ mcp:
   # Server endpoints
   endpoints:
     main: "/mcp"
-    stream: "/mcp/stream"
-    health: "/health"
+    health: "/ready"
+    
+  # Enable scanning
+  scan:
+    enabled: true
+    endpoint: "/mcp"
+    method: "POST"
   
   # Tool definitions
   tools:

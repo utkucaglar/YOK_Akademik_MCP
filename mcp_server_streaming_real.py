@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Optional, AsyncGenerator
 from datetime import datetime
 import time
 from aiohttp import web, ClientSession
-from aiohttp_cors import setup as cors_setup, ResourceOptions
 import logging
 from dotenv import load_dotenv
 
@@ -92,6 +91,16 @@ class RealScrapingMCPProtocolServer:
     async def handle_initialize(self, request):
         """MCP initialize endpoint"""
         try:
+            # Handle both GET and POST requests
+            if request.method == "GET":
+                # Simple status for GET requests
+                return web.json_response({
+                    "status": "ready",
+                    "service": "YOK Academic MCP Server",
+                    "version": "3.0.0",
+                    "protocol": "MCP 2024-11-05"
+                })
+            
             data = await request.json()
             session_id = self.generate_session_id()
             
@@ -121,21 +130,32 @@ class RealScrapingMCPProtocolServer:
             }
             
             # Session ID'yi header'a ekle
-            resp = web.json_response(response)
-            resp.headers['mcp-session-id'] = session_id
+            headers = {
+                'mcp-session-id': session_id,
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+            }
+            
+            resp = web.json_response(response, headers=headers)
             logger.info(f"✅ Session initialized: {session_id}")
             return resp
             
         except Exception as e:
             logger.error(f"Initialize error: {e}")
-            return web.json_response({
+            error_response = {
                 "jsonrpc": "2.0",
                 "id": data.get("id") if 'data' in locals() else None,
                 "error": {
                     "code": -32603,
                     "message": f"Internal error: {str(e)}"
                 }
-            }, status=500)
+            }
+            return web.json_response(error_response, status=500, headers={
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+            })
     
     async def handle_tools_list(self, request):
         """MCP tools/list endpoint"""
@@ -834,8 +854,34 @@ class RealScrapingMCPProtocolServer:
     async def handle_mcp_request(self, request):
         """Main MCP request handler"""
         try:
-            data = await request.json()
+            # Handle GET requests for status
+            if request.method == "GET":
+                return await self.handle_initialize(request)
+            
+            # Handle OPTIONS requests for CORS
+            if request.method == "OPTIONS":
+                return await self.handle_options(request)
+            
+            # Parse JSON for POST requests
+            try:
+                data = await request.json()
+            except Exception as json_error:
+                logger.error(f"JSON parse error: {json_error}")
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32700,
+                        "message": f"Parse error: {str(json_error)}"
+                    }
+                }, status=400, headers={
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
+                    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+                })
+            
             method = data.get("method")
+            logger.info(f"📨 MCP Request: {method}")
             
             if method == "initialize":
                 return await self.handle_initialize(request)
@@ -848,6 +894,10 @@ class RealScrapingMCPProtocolServer:
                     "jsonrpc": "2.0",
                     "id": data.get("id"),
                     "result": {}
+                }, headers={
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
+                    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
                 })
             else:
                 return web.json_response({
@@ -857,39 +907,67 @@ class RealScrapingMCPProtocolServer:
                         "code": -32601,
                         "message": f"Method not found: {method}"
                     }
-                }, status=404)
+                }, status=404, headers={
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
+                    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+                })
                 
         except Exception as e:
             logger.error(f"MCP request error: {e}")
+            import traceback
+            traceback.print_exc()
             return web.json_response({
                 "jsonrpc": "2.0",
                 "id": data.get("id") if 'data' in locals() else None,
                 "error": {
-                    "code": -32700,
-                    "message": f"Parse error: {str(e)}"
+                    "code": -32603,
+                    "message": f"Internal error: {str(e)}"
                 }
-            }, status=400)
+            }, status=500, headers={
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+            })
+
+async def cors_middleware(request, handler):
+    """CORS middleware for all requests"""
+    if request.method == "OPTIONS":
+        # Handle preflight requests
+        headers = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id, Authorization',
+            'Access-Control-Max-Age': '3600'
+        }
+        return web.Response(headers=headers)
+    
+    # Process the request
+    response = await handler(request)
+    
+    # Add CORS headers to response
+    response.headers.update({
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id, Authorization'
+    })
+    
+    return response
 
 def create_app():
     """Create web application with CORS and optimization"""
-    app = web.Application()
-    mcp_server = RealScrapingMCPProtocolServer()
-    
-    # CORS setup
+    # Create middleware stack
+    middlewares = []
     if CORS_ENABLED:
-        cors = cors_setup(app, defaults={
-            "*": ResourceOptions(
-                allow_credentials=True,
-                expose_headers="*",
-                allow_headers="*",
-                allow_methods="*"
-            )
-        })
+        middlewares.append(cors_middleware)
+    
+    app = web.Application(middlewares=middlewares)
+    mcp_server = RealScrapingMCPProtocolServer()
     
     # MCP Protocol endpoints
     app.router.add_post("/mcp", mcp_server.handle_mcp_request)
     app.router.add_get("/mcp", mcp_server.handle_mcp_request)
-    app.router.add_options("/mcp", mcp_server.handle_options)
+    app.router.add_options("/mcp", mcp_server.handle_mcp_request)
     
     # Health check endpoint
     async def health_check_handler(request):
@@ -929,6 +1007,31 @@ def create_app():
     app.router.add_get("/ready", ready_handler)
     app.router.add_get("/", ready_handler)  # Root endpoint
     
+    # MCP test endpoint
+    async def mcp_test_handler(request):
+        return web.json_response({
+            "status": "ok",
+            "mcp_server": "ready",
+            "endpoint": "/mcp",
+            "methods": ["GET", "POST", "OPTIONS"],
+            "test_initialize": {
+                "method": "POST",
+                "url": "/mcp",
+                "body": {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {}},
+                        "clientInfo": {"name": "TestClient", "version": "1.0.0"}
+                    }
+                }
+            }
+        })
+    
+    app.router.add_get("/mcp/test", mcp_test_handler)
+    
     # Metrics endpoint for monitoring
     async def metrics_handler(request):
         return web.json_response({
@@ -945,11 +1048,6 @@ def create_app():
         })
     
     app.router.add_get("/metrics", metrics_handler)
-    
-    # Add CORS to all routes if enabled
-    if CORS_ENABLED:
-        for route in list(app.router.routes()):
-            cors.add(route)
     
     return app
 
