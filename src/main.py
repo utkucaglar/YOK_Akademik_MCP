@@ -13,6 +13,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote
 from fastmcp import FastMCP
 from starlette.middleware.cors import CORSMiddleware
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route
 from typing import Optional, Dict, Any
 import logging
 
@@ -52,7 +55,10 @@ except ImportError as e:
             }
 
 # Setup logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Initialize MCP server
@@ -194,28 +200,209 @@ def get_profile(profile_url: str) -> str:
     
     return json.dumps(result, indent=2, ensure_ascii=False)
 
-# Add health check endpoint to FastMCP app
-from starlette.responses import JSONResponse
-
-def add_health_endpoint(app):
-    """Add health check endpoint to the FastMCP app"""
-    from starlette.routing import Route
-    
-    async def health_check(request):
+# Manual MCP Protocol Implementation for Smithery compatibility
+async def handle_mcp_request(request):
+    """Handle MCP protocol requests directly"""
+    try:
+        # Handle GET request for capabilities
+        if request.method == "GET":
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {
+                            "listChanged": False
+                        },
+                        "logging": {},
+                        "experimental": {}
+                    },
+                    "serverInfo": {
+                        "name": "YOK Academic MCP Server",
+                        "version": "3.0.0"
+                    },
+                    "instructions": "YÖK Academic research and collaboration analysis server"
+                }
+            })
+        
+        # Handle POST requests
+        data = await request.json()
+        method = data.get("method")
+        
+        logger.info(f"MCP Request: {method}")
+        
+        if method == "initialize":
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": data.get("id"),
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "tools": {
+                            "listChanged": False
+                        },
+                        "logging": {},
+                        "experimental": {}
+                    },
+                    "serverInfo": {
+                        "name": "YOK Academic MCP Server",
+                        "version": "3.0.0"
+                    },
+                    "instructions": "Use this server to search and analyze YÖK Academic profiles and collaborations."
+                }
+            })
+        
+        elif method == "tools/list":
+            tools = adapter.get_tools()
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": data.get("id"),
+                "result": {
+                    "tools": tools
+                }
+            })
+        
+        elif method == "tools/call":
+            tool_name = data.get("params", {}).get("name")
+            arguments = data.get("params", {}).get("arguments", {})
+            
+            if not tool_name:
+                return JSONResponse({
+                    "jsonrpc": "2.0",
+                    "id": data.get("id"),
+                    "error": {
+                        "code": -32602,
+                        "message": "Tool name is required"
+                    }
+                }, status_code=400)
+            
+            try:
+                result = await adapter.execute_tool(tool_name, arguments)
+                return JSONResponse({
+                    "jsonrpc": "2.0",
+                    "id": data.get("id"),
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(result, indent=2, ensure_ascii=False)
+                            }
+                        ]
+                    }
+                })
+            except Exception as e:
+                logger.error(f"Tool execution error: {e}")
+                return JSONResponse({
+                    "jsonrpc": "2.0",
+                    "id": data.get("id"),
+                    "error": {
+                        "code": -32603,
+                        "message": f"Tool execution failed: {str(e)}"
+                    }
+                }, status_code=500)
+        
+        elif method == "logging/setLevel":
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": data.get("id"),
+                "result": {}
+            })
+        
+        elif method.startswith("notifications/"):
+            # Handle notifications
+            logger.info(f"Received notification: {method}")
+            if data.get("id") is not None:
+                return JSONResponse({
+                    "jsonrpc": "2.0", 
+                    "id": data.get("id"),
+                    "result": {}
+                })
+            else:
+                return JSONResponse({}, status_code=204)
+        
+        else:
+            return JSONResponse({
+                "jsonrpc": "2.0",
+                "id": data.get("id"),
+                "error": {
+                    "code": -32601,
+                    "message": f"Method not found: {method}"
+                }
+            }, status_code=404)
+            
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON parse error: {e}")
         return JSONResponse({
-            "status": "healthy",
-            "service": "YOK Academic MCP Server",
-            "version": "3.0.0",
-            "protocol": "MCP 2024-11-05",
-            "endpoints": {
-                "mcp": "/mcp",
-                "health": "/health"
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {
+                "code": -32700,
+                "message": f"Parse error: {str(e)}"
             }
-        })
+        }, status_code=400)
+    except Exception as e:
+        logger.error(f"MCP request error: {e}")
+        return JSONResponse({
+            "jsonrpc": "2.0",
+            "id": data.get("id") if 'data' in locals() else None,
+            "error": {
+                "code": -32603,
+                "message": f"Internal error: {str(e)}"
+            }
+        }, status_code=500)
+
+async def health_check(request):
+    """Health check endpoint"""
+    return JSONResponse({
+        "status": "healthy",
+        "service": "YOK Academic MCP Server",
+        "version": "3.0.0",
+        "protocol": "MCP 2024-11-05",
+        "endpoints": {
+            "mcp": "/mcp",
+            "health": "/health"
+        }
+    })
+
+async def root_handler(request):
+    """Root endpoint"""
+    return JSONResponse({
+        "service": "YOK Academic MCP Server",
+        "version": "3.0.0",
+        "protocol": "MCP 2024-11-05",
+        "status": "running",
+        "endpoints": {
+            "mcp": "/mcp",
+            "health": "/health"
+        }
+    })
+
+def create_hybrid_app():
+    """Create a hybrid app with both manual MCP endpoints and FastMCP"""
     
-    # Add the health route
-    health_route = Route("/health", health_check, methods=["GET"])
-    app.routes.append(health_route)
+    # Define routes
+    routes = [
+        Route('/', root_handler, methods=["GET"]),
+        Route('/health', health_check, methods=["GET"]),
+        Route('/mcp', handle_mcp_request, methods=["GET", "POST", "OPTIONS"]),
+    ]
+    
+    # Create Starlette app
+    app = Starlette(routes=routes)
+    
+    # Add CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+        expose_headers=["mcp-session-id", "mcp-protocol-version"],
+        max_age=86400,
+    )
+    
+    # Apply custom middleware for config extraction
+    app = SmitheryConfigMiddleware(app)
     
     return app
 
@@ -223,39 +410,23 @@ def main():
     transport_mode = os.getenv("TRANSPORT", "stdio")
     
     if transport_mode == "http":
-        # HTTP mode with config extraction from URL parameters
+        # HTTP mode with manual MCP implementation for Smithery compatibility
         logger.info("=" * 60)
-        logger.info("YÖK Academic MCP Server - FastMCP Implementation")
+        logger.info("YÖK Academic MCP Server - Hybrid Implementation")
         logger.info("=" * 60)
         logger.info("🚀 Starting in HTTP mode...")
         
         try:
-            # Setup Starlette app with CORS for cross-origin requests
-            app = mcp.streamable_http_app()
+            # Create hybrid app with manual MCP endpoints
+            app = create_hybrid_app()
             
-            # Add health check endpoint
-            app = add_health_endpoint(app)
-            
-            # IMPORTANT: add CORS middleware for browser based clients
-            app.add_middleware(
-                CORSMiddleware,
-                allow_origins=["*"],
-                allow_credentials=True,
-                allow_methods=["GET", "POST", "OPTIONS"],
-                allow_headers=["*"],
-                expose_headers=["mcp-session-id", "mcp-protocol-version"],
-                max_age=86400,
-            )
-
-            # Apply custom middleware for config extraction (per-request API key handling)
-            app = SmitheryConfigMiddleware(app)
-
             # Use Smithery-required PORT environment variable (default 8081)
             port = int(os.environ.get("PORT", 8081))
             
             logger.info(f"📡 Server starting on 0.0.0.0:{port}")
             logger.info(f"🔧 MCP endpoint: http://0.0.0.0:{port}/mcp")
             logger.info(f"❤️  Health check: http://0.0.0.0:{port}/health")
+            logger.info(f"🏠 Root endpoint: http://0.0.0.0:{port}/")
             logger.info("=" * 60)
 
             uvicorn.run(
@@ -273,8 +444,7 @@ def main():
             sys.exit(1)
     
     else:
-        # Optional: add stdio transport for backwards compatibility
-        # You can publish this to uv for users to run locally
+        # STDIO mode using FastMCP for backwards compatibility
         logger.info("YÖK Academic MCP Server starting in stdio mode...")
         
         server_token = os.getenv("SERVER_TOKEN")
