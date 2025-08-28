@@ -487,7 +487,7 @@ class RealScrapingMCPProtocolServer:
             scraping_script = self.base_dir / "src" / "tools" / "scrape_main_profile.py"
             
             # Send scraping started event
-            await response.write(f"data: {json.dumps({
+            event_data = {
                 'event': 'progress_update',
                 'data': {
                     'step': 2,
@@ -496,7 +496,8 @@ class RealScrapingMCPProtocolServer:
                     'progress': '40.0%',
                     'timestamp': datetime.now().isoformat()
                 }
-            })}\n\n".encode('utf-8'))
+            }
+            await response.write(f"data: {json.dumps(event_data)}\n\n".encode('utf-8'))
             await response.drain()
             
             # Start scraping process
@@ -508,7 +509,7 @@ class RealScrapingMCPProtocolServer:
             )
             
             # Send scraping in progress event
-            await response.write(f"data: {json.dumps({
+            event_data = {
                 'event': 'progress_update',
                 'data': {
                     'step': 3,
@@ -517,7 +518,8 @@ class RealScrapingMCPProtocolServer:
                     'progress': '60.0%',
                     'timestamp': datetime.now().isoformat()
                 }
-            })}\n\n".encode('utf-8'))
+            }
+            await response.write(f"data: {json.dumps(event_data)}\n\n".encode('utf-8'))
             await response.drain()
             
             # Monitor the scraping process in real-time with file watching
