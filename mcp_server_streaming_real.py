@@ -649,13 +649,7 @@ class RealScrapingMCPProtocolServer:
                 
         except Exception as e:
             # Send error event
-            await response.write(f"data: {json.dumps({
-                'event': 'search_error',
-                'data': {
-                    'error': f'Scraping error: {str(e)}',
-                    'timestamp': datetime.now().isoformat()
-                }
-            })}\n\n".encode('utf-8'))
+            await response.write(f"data: {json.dumps({'event': 'search_error', 'data': {'error': f'Scraping error: {str(e)}', 'timestamp': datetime.now().isoformat()}})}\n\n".encode('utf-8'))
             
             logger.error(f"❌ Profile search error: {e}")
     
