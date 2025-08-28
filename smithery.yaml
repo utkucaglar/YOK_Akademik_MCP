@@ -1,5 +1,14 @@
 runtime: "container"
 
+resources:
+  cpu: "0.5"
+  memory: "1Gi"
+
+healthCheck:
+  path: "/ready"
+  initialDelay: 30
+  timeout: 10
+
 startCommand:
   type: "http"
   command: "python"

@@ -17,30 +17,22 @@ sys.path.insert(0, str(project_root))
 
 def setup_environment():
     """Smithery deployment için gerekli environment variables"""
-    # Default values
+    # Minimal defaults for faster startup
     defaults = {
         'MCP_SERVER_HOST': '0.0.0.0',
-        'MCP_SERVER_PORT': '8000',  # Smithery standardı
+        'MCP_SERVER_PORT': '8000',
         'HEADLESS_MODE': 'true',
         'CHROME_BIN': '/usr/bin/chromium',
-        'CHROME_DRIVER_PATH': '/usr/bin/chromedriver',
-        'CHROME_NO_SANDBOX': 'true',
-        'CHROME_DISABLE_DEV_SHM': 'true',
         'PYTHON_ENV': 'production',
         'CORS_ENABLED': 'true',
-        'CORS_ORIGINS': '*',
-        'SSE_HEARTBEAT_INTERVAL': '30',
-        'MAX_CONCURRENT_SESSIONS': '10'
+        'SSE_HEARTBEAT_INTERVAL': '60',  # Increased for less resource usage
+        'MAX_CONCURRENT_SESSIONS': '5'   # Reduced for less memory usage
     }
     
     # Set defaults if not already set
     for key, value in defaults.items():
         if key not in os.environ:
             os.environ[key] = value
-    
-    # Override port for Smithery if specified in config
-    if 'MCP_SERVER_PORT' in os.environ:
-        os.environ['MCP_SERVER_PORT'] = os.environ['MCP_SERVER_PORT']
 
 def setup_logging():
     """Production logging setup"""
@@ -82,27 +74,22 @@ def main():
         logger = setup_logging()
         ensure_directories()
         
-        # Import and start the MCP server
-        logger.info("Importing MCP server...")
-        from mcp_server_streaming_real import create_app, run_server
-        
-        logger.info("Creating application...")
-        app = create_app()
-        
         # Get host and port from environment
         host = os.getenv('MCP_SERVER_HOST', '0.0.0.0')
         port = int(os.getenv('MCP_SERVER_PORT', '8000'))
         
         logger.info(f"Starting MCP server on {host}:{port}")
-        logger.info("Server ready for Smithery deployment!")
         
-        # Start the server
+        # Import and start the MCP server
+        from mcp_server_streaming_real import create_app, run_server
+        
+        app = create_app()
         run_server(app, host, port)
         
     except Exception as e:
-        logging.error(f"Failed to start server: {e}")
+        print(f"Failed to start server: {e}")
         import traceback
-        logging.error(traceback.format_exc())
+        traceback.print_exc()
         sys.exit(1)
 
 if __name__ == "__main__":

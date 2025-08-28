@@ -341,11 +341,11 @@ class RealScrapingMCPProtocolServer:
         await response.prepare(request)
         
         try:
-            # Start streaming task
-            task = asyncio.create_task(
-                self.stream_tool_execution(response, tool_name, arguments, session_id)
-            )
-            self.streaming_tasks[session_id] = task
+        # Start streaming task
+        task = asyncio.create_task(
+            self.stream_tool_execution(response, tool_name, arguments, session_id)
+        )
+        self.streaming_tasks[session_id] = task
             self.active_streams[session_id] = response
         
             # Send initial response
@@ -955,8 +955,8 @@ class RealScrapingMCPProtocolServer:
                 }, status=400)
             
             # Parse JSON for POST requests
-            try:
-                data = await request.json()
+        try:
+            data = await request.json()
             except Exception as json_error:
                 logger.error(f"JSON parse error: {json_error}")
                 return web.json_response({
@@ -995,7 +995,7 @@ class RealScrapingMCPProtocolServer:
                 if wants_streaming:
                     return await self.handle_streaming_tools_call(request, data, session_id)
                 else:
-                    return await self.handle_tools_call(request)
+                return await self.handle_tools_call(request)
             elif method == "logging/setLevel":
                 return web.json_response({
                     "jsonrpc": "2.0",
@@ -1465,11 +1465,11 @@ def create_app():
     # Health check endpoint
     async def health_check_handler(request):
         try:
-            return web.json_response({
-                "status": "ok",
-                "service": "YOK Academic MCP Real Scraping Server",
-                "version": "3.0.0",
-                "protocol": "MCP 2024-11-05",
+        return web.json_response({
+            "status": "ok",
+            "service": "YOK Academic MCP Real Scraping Server",
+            "version": "3.0.0",
+            "protocol": "MCP 2024-11-05",
                 "environment": os.getenv("NODE_ENV", "development"),
                 "features": [
                     "Real-time streaming", 
@@ -1554,7 +1554,7 @@ if __name__ == "__main__":
         if not os.path.exists(chrome_bin):
             logger.warning(f"Chrome binary not found at {chrome_bin}")
         
-        app = create_app()
+    app = create_app()
         logger.info("=" * 80)
         logger.info("YOK Akademik Asistani - MCP Real Scraping Server v3.0.0")
         logger.info("=" * 80)
