@@ -551,7 +551,7 @@ class RealScrapingMCPProtocolServer:
                             total_profiles = current_data.get('total_profiles', 0)
                             
                             # Send incremental update
-                            await response.write(f"data: {json.dumps({
+                            event_data = {
                                 'event': 'profiles_update',
                                 'data': {
                                     'profiles_found': total_profiles,
@@ -559,7 +559,8 @@ class RealScrapingMCPProtocolServer:
                                     'timestamp': datetime.now().isoformat(),
                                     'message': f'Found {total_profiles} profiles so far...'
                                 }
-                            })}\n\n".encode('utf-8'))
+                            }
+                            await response.write(f"data: {json.dumps(event_data)}\n\n".encode('utf-8'))
                             await response.drain()
                             
                             logger.info(f"📡 Streamed {total_profiles} profiles in real-time")
@@ -572,13 +573,14 @@ class RealScrapingMCPProtocolServer:
                             logger.warning(f"⚠️  Error reading file: {e}")
                 
                 # Send heartbeat/progress update
-                await response.write(f"data: {json.dumps({
+                event_data = {
                     'event': 'scraping_progress',
                     'data': {
                         'message': 'Scraping in progress...',
                         'timestamp': datetime.now().isoformat()
                     }
-                })}\n\n".encode('utf-8'))
+                }
+                await response.write(f"data: {json.dumps(event_data)}\n\n".encode('utf-8'))
                 await response.drain()
                 
                 # Wait a bit before next update
@@ -589,7 +591,7 @@ class RealScrapingMCPProtocolServer:
             
             if process.returncode == 0:
                 # Send processing event
-                await response.write(f"data: {json.dumps({
+                event_data = {
                     'event': 'progress_update',
                     'data': {
                         'step': 4,
@@ -598,7 +600,8 @@ class RealScrapingMCPProtocolServer:
                         'progress': '80.0%',
                         'timestamp': datetime.now().isoformat()
                     }
-                })}\n\n".encode('utf-8'))
+                }
+                await response.write(f"data: {json.dumps(event_data)}\n\n".encode('utf-8'))
                 await response.drain()
                 
                 # Read the results
@@ -608,7 +611,7 @@ class RealScrapingMCPProtocolServer:
                         result_data = json.load(f)
                     
                     # Send completion with real results
-                    await response.write(f"data: {json.dumps({
+                    event_data = {
                         'event': 'search_completed',
                         'data': {
                             'profiles_found': result_data.get('total_profiles', 0),
@@ -617,29 +620,32 @@ class RealScrapingMCPProtocolServer:
                             'scraping_session_id': scraping_session_id,
                             'timestamp': datetime.now().isoformat()
                         }
-                    })}\n\n".encode('utf-8'))
+                    }
+                    await response.write(f"data: {json.dumps(event_data)}\n\n".encode('utf-8'))
                     
                     logger.info(f"✅ Real profile search completed: {result_data.get('total_profiles', 0)} profiles found")
                 else:
                     # Send error if no results file
-                    await response.write(f"data: {json.dumps({
+                    event_data = {
                         'event': 'search_error',
                         'data': {
                             'error': 'No results file found after scraping',
                             'timestamp': datetime.now().isoformat()
                         }
-                    })}\n\n".encode('utf-8'))
+                    }
+                    await response.write(f"data: {json.dumps(event_data)}\n\n".encode('utf-8'))
             else:
                 # Send error if scraping failed
                 error_output = stderr.decode('utf-8', errors='ignore')
-                await response.write(f"data: {json.dumps({
+                event_data = {
                     'event': 'search_error',
                     'data': {
                         'error': f'Scraping failed with return code {process.returncode}',
                         'stderr': error_output,
                         'timestamp': datetime.now().isoformat()
                     }
-                })}\n\n".encode('utf-8'))
+                }
+                await response.write(f"data: {json.dumps(event_data)}\n\n".encode('utf-8'))
                 
         except Exception as e:
             # Send error event
