@@ -1430,6 +1430,20 @@ async def cors_middleware(request, handler):
     
     return response
 
+def run_server(app, host="0.0.0.0", port=8000):
+    """Run the MCP server with proper configuration"""
+    try:
+        web.run_app(
+            app, 
+            host=host, 
+            port=port,
+            access_log=logger,
+            shutdown_timeout=30
+        )
+    except Exception as e:
+        logger.error(f"Failed to start server: {e}")
+        raise
+
 def create_app():
     """Create web application with CORS and optimization"""
     # Create middleware stack
@@ -1556,13 +1570,7 @@ if __name__ == "__main__":
         logger.info("=" * 80)
         logger.info("Server starting...")
         
-        web.run_app(
-            app, 
-            host=SERVER_HOST, 
-            port=SERVER_PORT,
-            access_log=logger,
-            shutdown_timeout=30
-        )
+        run_server(app, SERVER_HOST, SERVER_PORT)
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
     except Exception as e:

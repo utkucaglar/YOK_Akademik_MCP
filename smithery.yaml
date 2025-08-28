@@ -1,143 +1,23 @@
-name: yok-akademik-mcp
-description: "YÖK Akademik Asistanı - MCP Server with Real-time Streaming"
-version: "3.0.0"
+runtime: "container"
 
-# Smithery deployment configuration
-deployment:
-  type: mcp-server
-  protocol: http
-  streaming: true
-  
-# Runtime configuration
-runtime:
-  python: "3.10"
-  port: 5000
-  
-# Build configuration
-build:
-  install: |
-    pip install -r requirements.txt
-  
-# Health check configuration
-health:
-  path: "/ready"
-  interval: 30
-  timeout: 15
+startCommand:
+  type: "http"
+  command: "python"
+  args: ["-m", "server"]
 
-# Environment variables
-environment:
-  NODE_ENV: production
-  PYTHON_ENV: production
-  MCP_SERVER_PORT: 5000
-  MCP_SERVER_HOST: "0.0.0.0"
+configSchema:
+  type: object
+  properties:
+    MCP_SERVER_PORT:
+      type: string
+      description: "MCP server port (varsayılan: 8000)"
+      default: "8000"
+    HEADLESS_MODE:
+      type: string
+      description: "Chrome headless mode (varsayılan: true)"
+      default: "true"
+  required: []
+
+exampleConfig:
+  MCP_SERVER_PORT: "8000"
   HEADLESS_MODE: "true"
-  CHROME_BIN: "/usr/bin/chromium"
-  CHROME_DRIVER_PATH: "/usr/bin/chromedriver"
-  CHROME_NO_SANDBOX: "true"
-  CHROME_DISABLE_DEV_SHM: "true"
-
-# MCP server configuration
-mcp:
-  protocol_version: "2025-03-26"
-  capabilities:
-    tools: true
-    logging: true
-    experimental: true
-  
-  # Server endpoints
-  endpoints:
-    main: "/mcp"
-    health: "/ready"
-    
-  # Enable scanning
-  scan:
-    enabled: true
-    endpoint: "/mcp"
-    method: "POST"
-  
-  # Tool definitions
-  tools:
-    - name: "search_profile"
-      description: "YÖK Akademik platformunda akademisyen profili ara (real-time streaming ile sonuçları sunar)"
-      streaming: true
-      
-    - name: "get_profile"
-      description: "Session'daki tüm profil verilerini JSON formatında döndürür"
-      streaming: false
-      
-    - name: "get_collaborators"
-      description: "Seçilen profil için işbirlikçi araştırması başlatır"
-      streaming: true
-
-# Resource limits
-resources:
-  memory: "2Gi"
-  cpu: "1000m"
-  storage: "10Gi"
-
-# Logging configuration
-logging:
-  level: "INFO"
-  format: "structured"
-  outputs:
-    - "stdout"
-    - "file"
-
-# Security configuration
-security:
-  enable_cors: true
-  allowed_origins:
-    - "*"
-  rate_limiting:
-    enabled: true
-    requests_per_minute: 60
-    burst: 10
-
-# Monitoring
-monitoring:
-  metrics: true
-  traces: true
-  alerts:
-    - type: "error_rate"
-      threshold: 0.05
-    - type: "response_time"
-      threshold: 30000
-
-# Scaling configuration
-scaling:
-  min_instances: 1
-  max_instances: 3
-  target_cpu: 70
-  target_memory: 80
-
-# Data persistence
-persistence:
-  - name: "sessions"
-    path: "/app/public/collaborator-sessions"
-    size: "5Gi"
-    access_mode: "ReadWriteOnce"
-
-# Dependencies
-dependencies:
-  - name: "chromium"
-    version: "latest"
-    required: true
-  - name: "chromium-driver"
-    version: "latest"
-    required: true
-
-# Startup command
-start_command: "python -u mcp_server_streaming_real.py"
-
-# Readiness and liveness probes
-probes:
-  readiness:
-    path: "/ready"
-    initial_delay: 10
-    period: 10
-    timeout: 5
-  liveness:
-    path: "/ready"
-    initial_delay: 30
-    period: 15
-    timeout: 10
