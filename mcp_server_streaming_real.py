@@ -136,16 +136,19 @@ class RealScrapingMCPProtocolServer:
                 "status": "initialized"
             }
             
-            # MCP 2025-03-26 uyumlu response
+            # MCP 2024-11-05 uyumlu response (Smithery için)
             response = {
                 "jsonrpc": "2.0",
                 "id": data.get("id"),
                 "result": {
-                    "protocolVersion": "2025-03-26",
+                    "protocolVersion": "2024-11-05",
                     "capabilities": {
-                        "tools": {},
+                        "tools": {
+                            "listChanged": True
+                        },
                         "logging": {},
-                        "experimental": {}
+                        "resources": {},
+                        "prompts": {}
                     },
                     "serverInfo": {
                         "name": "YOK Academic MCP Real Scraping Server",
@@ -1493,15 +1496,15 @@ def create_app():
                 "service": "YOK Academic MCP Real Scraping Server",
                 "version": "3.0.0",
                 "protocol": "MCP 2024-11-05",
-                "environment": os.getenv("NODE_ENV", "development"),
-                "features": [
-                    "Real-time streaming", 
-                    "Real scraping integration", 
-                    "Progress updates", 
-                    "Event-driven responses",
-                    "CORS enabled" if CORS_ENABLED else "CORS disabled",
-                    f"Max concurrent sessions: {MAX_CONCURRENT_SESSIONS}"
-                ],
+                "environment": os.getenv("NODE_ENV", "production"),
+                "mcp_compatible": True,
+                "capabilities": ["tools", "logging", "resources", "prompts"],
+                "endpoints": {
+                    "mcp": "/mcp",
+                    "health": "/health",
+                    "ready": "/ready",
+                    "metrics": "/metrics"
+                },
                 "active_sessions": len(mcp_server.sessions),
                 "active_streams": len(mcp_server.active_streams),
                 "timestamp": datetime.now().isoformat()
@@ -1528,25 +1531,64 @@ def create_app():
         return web.json_response({
             "status": "ok",
             "mcp_server": "ready",
+            "protocol_version": "2024-11-05",
             "endpoint": "/mcp",
-            "methods": ["GET", "POST", "OPTIONS"],
+            "methods": ["GET", "POST", "OPTIONS", "DELETE"],
+            "transport": "streamable-http",
             "test_initialize": {
                 "method": "POST",
                 "url": "/mcp",
+                "headers": {"Content-Type": "application/json"},
                 "body": {
                     "jsonrpc": "2.0",
                     "id": 1,
                     "method": "initialize",
                     "params": {
-                        "protocolVersion": "2025-03-26",
-                        "capabilities": {"tools": {}},
-                        "clientInfo": {"name": "TestClient", "version": "1.0.0"}
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {
+                            "tools": {"listChanged": True},
+                            "logging": {},
+                            "resources": {},
+                            "prompts": {}
+                        },
+                        "clientInfo": {"name": "SmitheryTestClient", "version": "1.0.0"}
                     }
                 }
-            }
+            },
+            "available_tools": ["search_profile", "get_profile", "get_collaborators"]
         })
     
     app.router.add_get("/mcp/test", mcp_test_handler)
+    
+    # Ping endpoint for connectivity testing
+    async def ping_handler(request):
+        return web.json_response({
+            "pong": True,
+            "timestamp": datetime.now().isoformat(),
+            "server": "YOK Academic MCP Server",
+            "version": "3.0.0"
+        })
+    
+    app.router.add_get("/ping", ping_handler)
+    app.router.add_get("/mcp/ping", ping_handler)
+    
+    # Status endpoint for Smithery scanning
+    async def status_handler(request):
+        return web.json_response({
+            "status": "active",
+            "protocol": "MCP 2024-11-05",
+            "transport": "streamable-http",
+            "capabilities": ["tools", "logging", "resources", "prompts"],
+            "tools_available": 3,
+            "server_info": {
+                "name": "YOK Academic MCP Real Scraping Server",
+                "version": "3.0.0",
+                "description": "Real-time YÖK Akademik profile and collaborator scraping"
+            }
+        })
+    
+    app.router.add_get("/status", status_handler)
+    app.router.add_get("/mcp/status", status_handler)
     
     # Metrics endpoint for monitoring
     async def metrics_handler(request):

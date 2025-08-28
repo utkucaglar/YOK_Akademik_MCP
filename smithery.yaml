@@ -9,6 +9,15 @@ healthCheck:
   initialDelay: 30
   timeout: 10
 
+mcp:
+  endpoint: "/mcp"
+  protocol: "2024-11-05"
+  transport: "streamable-http"
+  testEndpoints:
+    - "/ping"
+    - "/status"
+    - "/health"
+
 startCommand:
   type: "http"
   command: "python"
