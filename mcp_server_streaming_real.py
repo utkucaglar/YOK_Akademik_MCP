@@ -27,7 +27,7 @@ from mcp_adapter import YOKAcademicMCPAdapter
 
 # Environment configuration
 SERVER_HOST = os.getenv("MCP_SERVER_HOST", "localhost")
-SERVER_PORT = int(os.getenv("MCP_SERVER_PORT", "5000"))
+SERVER_PORT = int(os.getenv("MCP_SERVER_PORT", "8000"))
 HEADLESS_MODE = os.getenv("HEADLESS_MODE", "false").lower() == "true"
 CORS_ENABLED = os.getenv("CORS_ENABLED", "true").lower() == "true"
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
@@ -105,6 +105,7 @@ class RealScrapingMCPProtocolServer:
     
     async def handle_initialize(self, request):
         """MCP initialize endpoint - MCP 2025-03-26 Streamable HTTP compatible"""
+        data = {}
         try:
             # Handle both GET and POST requests as per new spec
             if request.method == "GET":
@@ -341,11 +342,11 @@ class RealScrapingMCPProtocolServer:
         await response.prepare(request)
         
         try:
-        # Start streaming task
-        task = asyncio.create_task(
-            self.stream_tool_execution(response, tool_name, arguments, session_id)
-        )
-        self.streaming_tasks[session_id] = task
+            # Start streaming task
+            task = asyncio.create_task(
+                self.stream_tool_execution(response, tool_name, arguments, session_id)
+            )
+            self.streaming_tasks[session_id] = task
             self.active_streams[session_id] = response
         
             # Send initial response
@@ -407,7 +408,7 @@ class RealScrapingMCPProtocolServer:
             
             response = {
                 "jsonrpc": "2.0",
-                "id": request.json().get("id"),
+                "id": (await request.json()).get("id"),
                 "result": result
             }
             
@@ -418,7 +419,7 @@ class RealScrapingMCPProtocolServer:
             logger.error(f"Tool execution error: {e}")
             return web.json_response({
                 "jsonrpc": "2.0",
-                "id": request.json().get("id"),
+                "id": (await request.json()).get("id"),
                 "error": {
                     "code": -32603,
                     "message": f"Tool execution failed: {str(e)}"
@@ -434,16 +435,19 @@ class RealScrapingMCPProtocolServer:
             elif tool_name == 'get_collaborators':
                 await self.stream_real_collaborator_search(response, arguments, session_id)
             else:
-                await response.write(f"data: {json.dumps({'error': f'Unknown streaming tool: {tool_name}'})}\n\n".encode('utf-8'))
+                error_data = {'error': f'Unknown streaming tool: {tool_name}'}
+                await response.write(f"data: {json.dumps(error_data)}\n\n".encode('utf-8'))
                 
         except Exception as e:
             error_msg = f"Streaming error: {str(e)}"
             logger.error(error_msg)
-            await response.write(f"data: {json.dumps({'error': error_msg})}\n\n".encode('utf-8'))
+            error_data = {'error': error_msg}
+            await response.write(f"data: {json.dumps(error_data)}\n\n".encode('utf-8'))
         
         finally:
             # Send completion signal
-            await response.write(f"data: {json.dumps({'status': 'completed', 'tool': tool_name})}\n\n".encode('utf-8'))
+            completion_data = {'status': 'completed', 'tool': tool_name}
+            await response.write(f"data: {json.dumps(completion_data)}\n\n".encode('utf-8'))
     
     async def stream_real_profile_search(self, response, arguments: Dict, session_id: str):
         """Stream real profile search progress using actual scraping"""
@@ -649,7 +653,14 @@ class RealScrapingMCPProtocolServer:
                 
         except Exception as e:
             # Send error event
-            await response.write(f"data: {json.dumps({'event': 'search_error', 'data': {'error': f'Scraping error: {str(e)}', 'timestamp': datetime.now().isoformat()}})}\n\n".encode('utf-8'))
+            error_data = {
+                'event': 'search_error', 
+                'data': {
+                    'error': f'Scraping error: {str(e)}', 
+                    'timestamp': datetime.now().isoformat()
+                }
+            }
+            await response.write(f"data: {json.dumps(error_data)}\n\n".encode('utf-8'))
             
             logger.error(f"❌ Profile search error: {e}")
     
@@ -659,13 +670,14 @@ class RealScrapingMCPProtocolServer:
         logger.info(f"👥 Starting REAL collaborator search for session: {session_id}")
         
         # Send search started event
-        await response.write(f"data: {json.dumps({
+        start_event = {
             'event': 'collaborator_search_started',
             'data': {'session_id': session_id, 'timestamp': datetime.now().isoformat()}
-        })}\n\n".encode('utf-8'))
+        }
+        await response.write(f"data: {json.dumps(start_event)}\n\n".encode('utf-8'))
         
         # Send connecting event
-        await response.write(f"data: {json.dumps({
+        connect_event = {
             'event': 'progress_update',
             'data': {
                 'step': 1,
@@ -674,7 +686,8 @@ class RealScrapingMCPProtocolServer:
                 'progress': '25.0%',
                 'timestamp': datetime.now().isoformat()
             }
-        })}\n\n".encode('utf-8'))
+        }
+        await response.write(f"data: {json.dumps(connect_event)}\n\n".encode('utf-8'))
         
         try:
             # First, read existing profiles to select one for collaborator search
@@ -682,13 +695,14 @@ class RealScrapingMCPProtocolServer:
             main_profile_path = session_dir / "main_profile.json"
             
             if not main_profile_path.exists():
-                await response.write(f"data: {json.dumps({
+                error_event = {
                     'event': 'search_error',
                     'data': {
                         'error': 'No main profile data found. Please run search_profile first.',
                         'timestamp': datetime.now().isoformat()
                     }
-                })}\n\n".encode('utf-8'))
+                }
+                await response.write(f"data: {json.dumps(error_event)}\n\n".encode('utf-8'))
                 return
             
             # Read profiles and select the first one for collaborator search
@@ -697,13 +711,14 @@ class RealScrapingMCPProtocolServer:
                 profiles = profile_data.get('profiles', [])
             
             if not profiles:
-                await response.write(f"data: {json.dumps({
+                error_event = {
                     'event': 'search_error',
                     'data': {
                         'error': 'No profiles found in main profile data.',
                         'timestamp': datetime.now().isoformat()
                     }
-                })}\n\n".encode('utf-8'))
+                }
+                await response.write(f"data: {json.dumps(error_event)}\n\n".encode('utf-8'))
                 return
             
             # Select profile based on user choice (1-based) or default to first
@@ -719,7 +734,7 @@ class RealScrapingMCPProtocolServer:
             logger.info(f"🔍 Selected profile for collaborator search: {profile_name} (index: {profile_index})")
             
             # Send scraping started event
-            await response.write(f"data: {json.dumps({
+            scrape_start_event = {
                 'event': 'progress_update',
                 'data': {
                     'step': 2,
@@ -728,7 +743,8 @@ class RealScrapingMCPProtocolServer:
                     'progress': '50.0%',
                     'timestamp': datetime.now().isoformat()
                 }
-            })}\n\n".encode('utf-8'))
+            }
+            await response.write(f"data: {json.dumps(scrape_start_event)}\n\n".encode('utf-8'))
             await response.drain()
             
             # Run the actual collaborator scraping script
@@ -746,7 +762,7 @@ class RealScrapingMCPProtocolServer:
             )
             
             # Send scraping in progress event
-            await response.write(f"data: {json.dumps({
+            progress_event = {
                 'event': 'progress_update',
                 'data': {
                     'step': 3,
@@ -755,7 +771,8 @@ class RealScrapingMCPProtocolServer:
                     'progress': '75.0%',
                     'timestamp': datetime.now().isoformat()
                 }
-            })}\n\n".encode('utf-8'))
+            }
+            await response.write(f"data: {json.dumps(progress_event)}\n\n".encode('utf-8'))
             await response.drain()
             
             # Monitor the scraping process in real-time with file watching
@@ -823,13 +840,14 @@ class RealScrapingMCPProtocolServer:
                             logger.warning(f"⚠️  Error reading collaborators file: {e}")
                 
                 # Send heartbeat/progress update
-                await response.write(f"data: {json.dumps({
+                heartbeat_event = {
                     'event': 'scraping_progress',
                     'data': {
                         'message': 'Collaborator scraping in progress...',
                         'timestamp': datetime.now().isoformat()
                     }
-                })}\n\n".encode('utf-8'))
+                }
+                await response.write(f"data: {json.dumps(heartbeat_event)}\n\n".encode('utf-8'))
                 await response.drain()
                 
                 # Wait a bit before next update
@@ -853,7 +871,7 @@ class RealScrapingMCPProtocolServer:
                     total_collaborators = len(collaborators)
                     
                     # First send summary
-                    await response.write(f"data: {json.dumps({
+                    summary_event = {
                         'event': 'collaborator_search_completed',
                         'data': {
                             'total_collaborators': total_collaborators,
@@ -862,7 +880,8 @@ class RealScrapingMCPProtocolServer:
                             'timestamp': datetime.now().isoformat(),
                             'message': f'Found {total_collaborators} collaborators for {profile_name}'
                         }
-                    })}\n\n".encode('utf-8'))
+                    }
+                    await response.write(f"data: {json.dumps(summary_event)}\n\n".encode('utf-8'))
                     
                     # Send collaborators in smaller chunks (max 10 per chunk)
                     chunk_size = 10
@@ -886,34 +905,37 @@ class RealScrapingMCPProtocolServer:
                     logger.info(f"✅ Real collaborator search completed: {len(collaborators)} collaborators found for {profile_name}")
                 else:
                     # Send error if no results file
-                    await response.write(f"data: {json.dumps({
+                    error_event = {
                         'event': 'search_error',
                         'data': {
                             'error': 'No collaborators file found after scraping',
                             'timestamp': datetime.now().isoformat()
                         }
-                    })}\n\n".encode('utf-8'))
+                    }
+                    await response.write(f"data: {json.dumps(error_event)}\n\n".encode('utf-8'))
             else:
                 # Send error if scraping failed
                 error_output = stderr.decode('utf-8', errors='ignore')
-                await response.write(f"data: {json.dumps({
+                error_event = {
                     'event': 'search_error',
                     'data': {
                         'error': f'Collaborator scraping failed with return code {process.returncode}',
                         'stderr': error_output,
                         'timestamp': datetime.now().isoformat()
                     }
-                })}\n\n".encode('utf-8'))
+                }
+                await response.write(f"data: {json.dumps(error_event)}\n\n".encode('utf-8'))
                 
         except Exception as e:
             # Send error event
-            await response.write(f"data: {json.dumps({
+            error_event = {
                 'event': 'search_error',
                 'data': {
                     'error': f'Collaborator search error: {str(e)}',
                     'timestamp': datetime.now().isoformat()
                 }
-            })}\n\n".encode('utf-8'))
+            }
+            await response.write(f"data: {json.dumps(error_event)}\n\n".encode('utf-8'))
             
             logger.error(f"❌ Collaborator search error: {e}")
     
@@ -921,7 +943,7 @@ class RealScrapingMCPProtocolServer:
         """Handle CORS preflight requests"""
         headers = {
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE',
             'Access-Control-Allow-Headers': 'Content-Type, mcp-session-id',
             'Access-Control-Max-Age': '3600'
         }
@@ -929,6 +951,7 @@ class RealScrapingMCPProtocolServer:
     
     async def handle_mcp_request(self, request):
         """Main MCP request handler - MCP 2025-03-26 Streamable HTTP"""
+        data = {}
         try:
             # Handle GET requests for SSE stream
             if request.method == "GET":
@@ -955,8 +978,8 @@ class RealScrapingMCPProtocolServer:
                 }, status=400)
             
             # Parse JSON for POST requests
-        try:
-            data = await request.json()
+            try:
+                data = await request.json()
             except Exception as json_error:
                 logger.error(f"JSON parse error: {json_error}")
                 return web.json_response({
@@ -995,7 +1018,7 @@ class RealScrapingMCPProtocolServer:
                 if wants_streaming:
                     return await self.handle_streaming_tools_call(request, data, session_id)
                 else:
-                return await self.handle_tools_call(request)
+                    return await self.handle_tools_call(request)
             elif method == "logging/setLevel":
                 return web.json_response({
                     "jsonrpc": "2.0",
@@ -1465,11 +1488,11 @@ def create_app():
     # Health check endpoint
     async def health_check_handler(request):
         try:
-        return web.json_response({
-            "status": "ok",
-            "service": "YOK Academic MCP Real Scraping Server",
-            "version": "3.0.0",
-            "protocol": "MCP 2024-11-05",
+            return web.json_response({
+                "status": "ok",
+                "service": "YOK Academic MCP Real Scraping Server",
+                "version": "3.0.0",
+                "protocol": "MCP 2024-11-05",
                 "environment": os.getenv("NODE_ENV", "development"),
                 "features": [
                     "Real-time streaming", 
@@ -1554,7 +1577,7 @@ if __name__ == "__main__":
         if not os.path.exists(chrome_bin):
             logger.warning(f"Chrome binary not found at {chrome_bin}")
         
-    app = create_app()
+        app = create_app()
         logger.info("=" * 80)
         logger.info("YOK Akademik Asistani - MCP Real Scraping Server v3.0.0")
         logger.info("=" * 80)
