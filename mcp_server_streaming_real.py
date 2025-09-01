@@ -146,13 +146,21 @@ class RealScrapingMCPProtocolServer:
                         "tools": {
                             "listChanged": True
                         },
-                        "logging": {},
-                        "resources": {},
-                        "prompts": {}
+                        "logging": {
+                            "setLevel": True
+                        },
+                        "resources": {
+                            "subscribe": False,
+                            "listChanged": False
+                        },
+                        "prompts": {
+                            "listChanged": False
+                        }
                     },
                     "serverInfo": {
                         "name": "YOK Academic MCP Real Scraping Server",
-                        "version": "3.0.0"
+                        "version": "3.0.0",
+                        "description": "Real-time YÖK Akademik profile and collaborator scraping with streaming support"
                     }
                 }
             }
@@ -434,6 +442,29 @@ class RealScrapingMCPProtocolServer:
                     "message": f"Internal error: {str(e)}"
                 }
             }, status=500, headers=self.get_cors_headers())
+    
+    async def handle_notifications_initialized(self, request):
+        """MCP notifications/initialized endpoint - MCP 2025-03-26"""
+        try:
+            data = await request.json()
+            session_id = request.headers.get('Mcp-Session-Id')
+            
+            # This is a notification, so we return 202 Accepted with no body
+            logger.info(f"📋 Client initialized notification received for session: {session_id}")
+            
+            # Return 202 Accepted as per MCP spec for notifications
+            return web.Response(status=202, headers=self.get_cors_headers())
+            
+        except Exception as e:
+            logger.error(f"Notifications initialized error: {e}")
+            # For notifications that fail, return 400 Bad Request with optional error details
+            return web.json_response({
+                "jsonrpc": "2.0", 
+                "error": {
+                    "code": -32603,
+                    "message": f"Internal error: {str(e)}"
+                }
+            }, status=400, headers=self.get_cors_headers())
     
     async def handle_tools_call(self, request):
         """MCP tools/call endpoint with streaming support"""
@@ -1192,9 +1223,10 @@ class RealScrapingMCPProtocolServer:
             
             logger.info(f"📨 MCP Request: {method} (Session: {session_id})")
             
-            # Check if streaming request contains JSON-RPC requests
+            # Check if streaming request contains JSON-RPC requests  
             accept_header = request.headers.get('Accept', '')
             wants_streaming = 'text/event-stream' in accept_header
+            wants_json = 'application/json' in accept_header
             
             if method == "initialize":
                 return await self.handle_initialize(request)
@@ -1210,6 +1242,8 @@ class RealScrapingMCPProtocolServer:
                 return await self.handle_resources_list(request)
             elif method == "resources/read":
                 return await self.handle_resources_read(request)
+            elif method == "notifications/initialized":
+                return await self.handle_notifications_initialized(request)
             elif method == "logging/setLevel":
                 return web.json_response({
                     "jsonrpc": "2.0",
@@ -1285,6 +1319,8 @@ class RealScrapingMCPProtocolServer:
                 resp = await self.handle_resources_list(request)
             elif method == "resources/read":
                 resp = await self.handle_resources_read(request)
+            elif method == "notifications/initialized":
+                resp = await self.handle_notifications_initialized(request)
             elif method == "tools/call":
                 resp = await self.handle_tools_call(request)
             else:
@@ -1752,10 +1788,14 @@ def create_app():
             "endpoint": "/mcp",
             "methods": ["GET", "POST", "OPTIONS", "DELETE"],
             "transport": "streamable-http",
+            "smithery_compatible": True,
             "test_initialize": {
                 "method": "POST",
                 "url": "/mcp",
-                "headers": {"Content-Type": "application/json"},
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream"
+                },
                 "body": {
                     "jsonrpc": "2.0",
                     "id": 1,
@@ -1764,15 +1804,21 @@ def create_app():
                         "protocolVersion": "2024-11-05",
                         "capabilities": {
                             "tools": {"listChanged": True},
-                            "logging": {},
-                            "resources": {},
-                            "prompts": {}
+                            "logging": {"setLevel": True},
+                            "resources": {"subscribe": False, "listChanged": False},
+                            "prompts": {"listChanged": False}
                         },
                         "clientInfo": {"name": "SmitheryTestClient", "version": "1.0.0"}
                     }
                 }
             },
-            "available_tools": ["search_profile", "get_profile", "get_collaborators"]
+            "available_tools": ["search_profile", "get_profile", "get_collaborators"],
+            "capabilities": {
+                "tools": {"listChanged": True},
+                "logging": {"setLevel": True}, 
+                "resources": {"subscribe": False, "listChanged": False},
+                "prompts": {"listChanged": False}
+            }
         })
     
     app.router.add_get("/mcp/test", mcp_test_handler)
@@ -1833,8 +1879,20 @@ if __name__ == "__main__":
         
         # Test Chrome availability early
         chrome_bin = os.getenv("CHROME_BIN", "/usr/bin/chromium")
-        if not os.path.exists(chrome_bin):
-            logger.warning(f"Chrome binary not found at {chrome_bin}")
+        chrome_paths = [chrome_bin, "/usr/bin/chromium", "/usr/bin/google-chrome", "/usr/bin/chromium-browser"]
+        
+        chrome_found = False
+        for path in chrome_paths:
+            if os.path.exists(path):
+                chrome_found = True
+                logger.info(f"Chrome binary found at: {path}")
+                if path != chrome_bin:
+                    os.environ["CHROME_BIN"] = path
+                break
+        
+        if not chrome_found:
+            logger.warning(f"Chrome binary not found in any of: {chrome_paths}")
+            logger.warning("Scraping functionality may not work properly")
         
         app = create_app()
         logger.info("=" * 80)
