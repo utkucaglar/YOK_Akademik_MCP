@@ -1,5 +1,9 @@
 runtime: "container"
 
+build:
+  dockerfile: "Dockerfile"
+  dockerBuildPath: "."
+
 resources:
   cpu: "0.5"
   memory: "1Gi"
@@ -44,20 +48,18 @@ startCommand:
   type: "http"
   command: "python"
   args: ["-m", "server"]
-
-configSchema:
-  type: object
-  properties:
-    MCP_SERVER_PORT:
-      type: string
-      description: "MCP server port (varsayılan: 8000)"
-      default: "8000"
-    HEADLESS_MODE:
-      type: string
-      description: "Chrome headless mode (varsayılan: true)"
-      default: "true"
-  required: []
-
-exampleConfig:
-  MCP_SERVER_PORT: "8000"
-  HEADLESS_MODE: "true"
+  configSchema:
+    type: object
+    properties:
+      MCP_SERVER_PORT:
+        type: string
+        description: "MCP server port (varsayılan: 8000)"
+        default: "8000"
+      HEADLESS_MODE:
+        type: string
+        description: "Chrome headless mode (varsayılan: true)"
+        default: "true"
+    required: []
+  exampleConfig:
+    MCP_SERVER_PORT: "8000"
+    HEADLESS_MODE: "true"
