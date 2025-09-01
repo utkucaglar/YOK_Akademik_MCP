@@ -275,6 +275,166 @@ class RealScrapingMCPProtocolServer:
                 }
             }, status=500)
     
+    async def handle_resources_list(self, request):
+        """MCP resources/list endpoint"""
+        try:
+            data = await request.json()
+            session_id = request.headers.get('Mcp-Session-Id')
+            
+            # Resources don't require a valid session for listing
+            # Return available resources for YÖK Akademik data
+            resources = [
+                {
+                    "uri": "yok://sessions",
+                    "name": "Active Sessions",
+                    "description": "List of active scraping sessions",
+                    "mimeType": "application/json"
+                },
+                {
+                    "uri": "yok://profiles",
+                    "name": "Profile Results",
+                    "description": "Academic profile search results",
+                    "mimeType": "application/json"
+                },
+                {
+                    "uri": "yok://collaborators",
+                    "name": "Collaborator Results",
+                    "description": "Collaborator analysis results",
+                    "mimeType": "application/json"
+                }
+            ]
+            
+            response = {
+                "jsonrpc": "2.0",
+                "id": data.get("id"),
+                "result": {
+                    "resources": resources
+                }
+            }
+            
+            logger.info(f"📋 Resources listed for session: {session_id}")
+            return web.json_response(response, headers=self.get_cors_headers())
+            
+        except Exception as e:
+            logger.error(f"Resources list error: {e}")
+            return web.json_response({
+                "jsonrpc": "2.0",
+                "id": data.get("id"),
+                "error": {
+                    "code": -32603,
+                    "message": f"Internal error: {str(e)}"
+                }
+            }, status=500, headers=self.get_cors_headers())
+    
+    async def handle_resources_read(self, request):
+        """MCP resources/read endpoint"""
+        try:
+            data = await request.json()
+            uri = data.get("params", {}).get("uri", "")
+            
+            if not uri:
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": data.get("id"),
+                    "error": {
+                        "code": -32602,
+                        "message": "URI parameter is required"
+                    }
+                }, status=400, headers=self.get_cors_headers())
+            
+            # Parse URI and return appropriate data
+            if uri == "yok://sessions":
+                # Return active sessions data
+                sessions_data = {
+                    "active_sessions": list(self.sessions.keys()),
+                    "total_sessions": len(self.sessions),
+                    "timestamp": datetime.now().isoformat()
+                }
+                content = json.dumps(sessions_data, indent=2, ensure_ascii=False)
+                
+            elif uri == "yok://profiles":
+                # Return aggregated profile data from all sessions
+                all_profiles = []
+                for session_id in self.sessions:
+                    session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
+                    profile_file = session_dir / "main_profile.json"
+                    if profile_file.exists():
+                        try:
+                            with open(profile_file, 'r', encoding='utf-8') as f:
+                                profile_data = json.load(f)
+                                all_profiles.extend(profile_data.get('profiles', []))
+                        except:
+                            continue
+                
+                profiles_data = {
+                    "total_profiles": len(all_profiles),
+                    "profiles": all_profiles,
+                    "timestamp": datetime.now().isoformat()
+                }
+                content = json.dumps(profiles_data, indent=2, ensure_ascii=False)
+                
+            elif uri == "yok://collaborators":
+                # Return aggregated collaborator data from all sessions
+                all_collaborators = []
+                for session_id in self.sessions:
+                    session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
+                    collab_file = session_dir / "collaborators.json"
+                    if collab_file.exists():
+                        try:
+                            with open(collab_file, 'r', encoding='utf-8') as f:
+                                collab_data = json.load(f)
+                                if isinstance(collab_data, list):
+                                    all_collaborators.extend(collab_data)
+                                elif isinstance(collab_data, dict):
+                                    all_collaborators.extend(collab_data.get('collaborator_profiles', []))
+                        except:
+                            continue
+                
+                collaborators_data = {
+                    "total_collaborators": len(all_collaborators),
+                    "collaborators": all_collaborators,
+                    "timestamp": datetime.now().isoformat()
+                }
+                content = json.dumps(collaborators_data, indent=2, ensure_ascii=False)
+                
+            else:
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": data.get("id"),
+                    "error": {
+                        "code": -32601,
+                        "message": f"Unknown resource URI: {uri}"
+                    }
+                }, status=404, headers=self.get_cors_headers())
+            
+            response = {
+                "jsonrpc": "2.0",
+                "id": data.get("id"),
+                "result": {
+                    "contents": [
+                        {
+                            "uri": uri,
+                            "mimeType": "application/json",
+                            "text": content
+                        }
+                    ]
+                }
+            }
+            
+            logger.info(f"📖 Resource read: {uri}")
+            return web.json_response(response, headers=self.get_cors_headers())
+            
+        except Exception as e:
+            logger.error(f"Resources read error: {e}")
+            return web.json_response({
+                "jsonrpc": "2.0",
+                "id": data.get("id"),
+                "error": {
+                    "code": -32603,
+                    "message": f"Internal error: {str(e)}"
+                }
+            }, status=500, headers=self.get_cors_headers())
+    
     async def handle_tools_call(self, request):
         """MCP tools/call endpoint with streaming support"""
         try:
@@ -697,16 +857,38 @@ class RealScrapingMCPProtocolServer:
             session_dir = self.base_dir / "public" / "collaborator-sessions" / session_id
             main_profile_path = session_dir / "main_profile.json"
             
+            # If main profile doesn't exist in current session, look for latest session with data
             if not main_profile_path.exists():
-                error_event = {
-                    'event': 'search_error',
-                    'data': {
-                        'error': 'No main profile data found. Please run search_profile first.',
-                        'timestamp': datetime.now().isoformat()
+                logger.info(f"No profile data in current session {session_id}, looking for latest session...")
+                sessions_dir = self.base_dir / "public" / "collaborator-sessions"
+                
+                # Find the latest session with main_profile.json
+                latest_session = None
+                latest_time = 0
+                
+                for session_folder in sessions_dir.iterdir():
+                    if session_folder.is_dir() and session_folder.name.startswith('session_'):
+                        profile_file = session_folder / "main_profile.json"
+                        if profile_file.exists():
+                            mod_time = profile_file.stat().st_mtime
+                            if mod_time > latest_time:
+                                latest_time = mod_time
+                                latest_session = session_folder.name
+                
+                if latest_session:
+                    logger.info(f"Found profile data in session: {latest_session}")
+                    session_dir = sessions_dir / latest_session
+                    main_profile_path = session_dir / "main_profile.json"
+                else:
+                    error_event = {
+                        'event': 'search_error',
+                        'data': {
+                            'error': 'No profile data found in any session. Please run search_profile first.',
+                            'timestamp': datetime.now().isoformat()
+                        }
                     }
-                }
-                await response.write(f"data: {json.dumps(error_event)}\n\n".encode('utf-8'))
-                return
+                    await response.write(f"data: {json.dumps(error_event)}\n\n".encode('utf-8'))
+                    return
             
             # Read profiles and select the first one for collaborator search
             with open(main_profile_path, 'r', encoding='utf-8') as f:
@@ -754,7 +936,9 @@ class RealScrapingMCPProtocolServer:
             scraping_script = self.base_dir / "src" / "tools" / "scrape_collaborators.py"
             
             # Start scraping process with profile URL
-            cmd_args = [sys.executable, str(scraping_script), profile_name, session_id, "--profile-url", profile_url]
+            # Use the session_dir that contains the actual profile data for output
+            output_session_id = session_dir.name  # Use the session where we found data
+            cmd_args = [sys.executable, str(scraping_script), profile_name, output_session_id, "--profile-url", profile_url]
             logger.info(f"🔧 Running collaborator scraping with args: {cmd_args}")
             
             process = await asyncio.create_subprocess_exec(
@@ -1022,6 +1206,10 @@ class RealScrapingMCPProtocolServer:
                     return await self.handle_streaming_tools_call(request, data, session_id)
                 else:
                     return await self.handle_tools_call(request)
+            elif method == "resources/list":
+                return await self.handle_resources_list(request)
+            elif method == "resources/read":
+                return await self.handle_resources_read(request)
             elif method == "logging/setLevel":
                 return web.json_response({
                     "jsonrpc": "2.0",
@@ -1093,6 +1281,10 @@ class RealScrapingMCPProtocolServer:
                 resp = await self.handle_initialize(request)
             elif method == "tools/list":
                 resp = await self.handle_tools_list(request)
+            elif method == "resources/list":
+                resp = await self.handle_resources_list(request)
+            elif method == "resources/read":
+                resp = await self.handle_resources_read(request)
             elif method == "tools/call":
                 resp = await self.handle_tools_call(request)
             else:
@@ -1327,8 +1519,31 @@ class RealScrapingMCPProtocolServer:
             
             # First, read the selected profile from main_profile.json
             main_profile_path = session_dir / "main_profile.json"
+            
+            # If main profile doesn't exist in current session, look for latest session with data
             if not main_profile_path.exists():
-                raise Exception(f"Main profile file not found: {main_profile_path}")
+                logger.info(f"No profile data in current session {session_id}, looking for latest session...")
+                sessions_dir = self.base_dir / "public" / "collaborator-sessions"
+                
+                # Find the latest session with main_profile.json
+                latest_session = None
+                latest_time = 0
+                
+                for session_folder in sessions_dir.iterdir():
+                    if session_folder.is_dir() and session_folder.name.startswith('session_'):
+                        profile_file = session_folder / "main_profile.json"
+                        if profile_file.exists():
+                            mod_time = profile_file.stat().st_mtime
+                            if mod_time > latest_time:
+                                latest_time = mod_time
+                                latest_session = session_folder.name
+                
+                if latest_session:
+                    logger.info(f"Found profile data in session: {latest_session}")
+                    session_dir = sessions_dir / latest_session
+                    main_profile_path = session_dir / "main_profile.json"
+                else:
+                    raise Exception(f"No profile data found in any session. Please run search_profile first.")
             
             with open(main_profile_path, 'r', encoding='utf-8') as f:
                 profile_data = json.load(f)
@@ -1352,8 +1567,10 @@ class RealScrapingMCPProtocolServer:
             logger.info(f"👥 Starting synchronous collaborator scraping for profile {profile_index}: {profile_name}")
             
             # Execute scraping script with correct parameters
+            # Use the session_dir that contains the actual profile data for output
+            output_session_id = session_dir.name  # Use the session where we found data
             process = await asyncio.create_subprocess_exec(
-                sys.executable, str(script_path), profile_name, session_id, "--profile-url", profile_url,
+                sys.executable, str(script_path), profile_name, output_session_id, "--profile-url", profile_url,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(self.base_dir)
