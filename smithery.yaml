@@ -1,9 +1,5 @@
 runtime: "container"
 
-build:
-  dockerfile: "Dockerfile"
-  dockerBuildPath: "."
-
 resources:
   cpu: "0.5"
   memory: "1Gi"
@@ -21,45 +17,25 @@ mcp:
     - "/ping"
     - "/status"
     - "/health"
-  testConfig:
-    initializeRequest:
-      method: "POST"
-      url: "/mcp"
-      headers:
-        "Content-Type": "application/json"
-        "Accept": "application/json, text/event-stream"
-      body:
-        jsonrpc: "2.0"
-        id: 1
-        method: "initialize"
-        params:
-          protocolVersion: "2024-11-05"
-          capabilities:
-            tools:
-              listChanged: true
-            logging: {}
-            resources: {}
-            prompts: {}
-          clientInfo:
-            name: "SmitheryTestClient"
-            version: "1.0.0"
 
 startCommand:
   type: "http"
   command: "python"
   args: ["-m", "server"]
-  configSchema:
-    type: object
-    properties:
-      MCP_SERVER_PORT:
-        type: string
-        description: "MCP server port (varsayılan: 8000)"
-        default: "8000"
-      HEADLESS_MODE:
-        type: string
-        description: "Chrome headless mode (varsayılan: true)"
-        default: "true"
-    required: []
-  exampleConfig:
-    MCP_SERVER_PORT: "8000"
-    HEADLESS_MODE: "true"
+
+configSchema:
+  type: object
+  properties:
+    MCP_SERVER_PORT:
+      type: string
+      description: "MCP server port (varsayılan: 8000)"
+      default: "8000"
+    HEADLESS_MODE:
+      type: string
+      description: "Chrome headless mode (varsayılan: true)"
+      default: "true"
+  required: []
+
+exampleConfig:
+  MCP_SERVER_PORT: "8000"
+  HEADLESS_MODE: "true"
