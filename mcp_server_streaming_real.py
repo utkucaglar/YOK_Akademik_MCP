@@ -67,6 +67,23 @@ else:
 
 logger = logging.getLogger(__name__)
 
+@web.middleware
+async def request_logging_middleware(request, handler):
+    try:
+        logger.info(
+            f"➡️  {request.method} {request.path} | Accept={request.headers.get('Accept','')} | Content-Type={request.headers.get('Content-Type','')} | Session={request.headers.get('Mcp-Session-Id') or request.headers.get('mcp-session-id') or ''}"
+        )
+    except Exception:
+        pass
+    response = await handler(request)
+    try:
+        logger.info(
+            f"⬅️  {request.method} {request.path} -> {response.status} | Content-Type={response.headers.get('Content-Type','')}"
+        )
+    except Exception:
+        pass
+    return response
+
 class RealScrapingMCPProtocolServer:
     """
     Enhanced MCP Server with real-time streaming during actual scraping
@@ -1700,6 +1717,8 @@ def create_app():
     middlewares = []
     if CORS_ENABLED:
         middlewares.append(cors_middleware)
+    # Always include request logger to aid discovery troubleshooting
+    middlewares.append(request_logging_middleware)
     
     app = web.Application(middlewares=middlewares)
     mcp_server = RealScrapingMCPProtocolServer()
