@@ -1145,14 +1145,16 @@ class RealScrapingMCPProtocolServer:
                 accept_header = request.headers.get('Accept', '')
                 if 'text/event-stream' in accept_header:
                     return await self.handle_sse_stream(request)
-                # Return a small JSON descriptor so automated scanners can detect capabilities
+                # Return a JSON-RPC-shaped descriptor to improve compatibility with scanners
                 desc = {
-                    "status": "ok",
-                    "transport": "streamable-http",
-                    "protocol": "MCP 2024-11-05",
-                    "endpoints": {"mcp": "/mcp", "health": "/health", "ready": "/ready"},
-                    "capabilities": ["tools", "logging", "resources", "prompts"],
-                    "methods": ["initialize", "tools/list", "tools/call", "resources/list", "resources/read"]
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {"listChanged": True}, "logging": {}, "resources": {}, "prompts": {}},
+                        "serverInfo": {"name": "YOK Academic MCP Real Scraping Server", "version": "3.0.0"},
+                        "endpoints": {"mcp": "/mcp", "health": "/health", "ready": "/ready"}
+                    }
                 }
                 return web.json_response(desc, headers=self.get_cors_headers())
             
@@ -1826,6 +1828,20 @@ def create_app():
         })
     
     app.router.add_get("/metrics", metrics_handler)
+    
+    # Well-known MCP metadata for discovery
+    async def well_known_mcp_handler(request):
+        payload = {
+            "protocolVersion": "2024-11-05",
+            "transport": "streamable-http",
+            "endpoint": "/mcp",
+            "capabilities": ["tools", "logging", "resources", "prompts"],
+            "serverInfo": {"name": "YOK Academic MCP Real Scraping Server", "version": "3.0.0"},
+            "health": "/health"
+        }
+        return web.json_response(payload)
+    
+    app.router.add_get("/.well-known/mcp.json", well_known_mcp_handler)
     
     return app
 
