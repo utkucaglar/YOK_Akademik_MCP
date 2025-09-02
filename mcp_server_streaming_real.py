@@ -240,16 +240,9 @@ class RealScrapingMCPProtocolServer:
         try:
             data = await request.json()
             session_id = request.headers.get('Mcp-Session-Id')
-            
-            if not session_id or session_id not in self.sessions:
-                return web.json_response({
-                    "jsonrpc": "2.0",
-                    "id": data.get("id"),
-                    "error": {
-                        "code": -32001,
-                        "message": "Invalid session"
-                    }
-                }, status=400)
+            # During automated scans, a formal session may not be established yet.
+            # Be permissive and return tools even without a valid session so the
+            # scanner can index capabilities.
             
             tools = self.adapter.get_tools()
             
@@ -1140,9 +1133,21 @@ class RealScrapingMCPProtocolServer:
         """Main MCP request handler - MCP 2025-03-26 Streamable HTTP"""
         data = {}
         try:
-            # Handle GET requests for SSE stream
+            # Handle GET requests: if client requests SSE, stream; otherwise return JSON descriptor
             if request.method == "GET":
-                return await self.handle_sse_stream(request)
+                accept_header = request.headers.get('Accept', '')
+                if 'text/event-stream' in accept_header:
+                    return await self.handle_sse_stream(request)
+                # Return a small JSON descriptor so automated scanners can detect capabilities
+                desc = {
+                    "status": "ok",
+                    "transport": "streamable-http",
+                    "protocol": "MCP 2024-11-05",
+                    "endpoints": {"mcp": "/mcp", "health": "/health", "ready": "/ready"},
+                    "capabilities": ["tools", "logging", "resources", "prompts"],
+                    "methods": ["initialize", "tools/list", "tools/call", "resources/list", "resources/read"]
+                }
+                return web.json_response(desc, headers=self.get_cors_headers())
             
             # Handle DELETE requests for session termination
             if request.method == "DELETE":
@@ -1152,19 +1157,7 @@ class RealScrapingMCPProtocolServer:
             if request.method == "OPTIONS":
                 return await self.handle_options(request)
             
-            # Validate Content-Type for POST requests
-            content_type = request.headers.get('Content-Type', '')
-            if request.method == "POST" and not content_type.startswith('application/json'):
-                return web.json_response({
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {
-                        "code": -32700,
-                        "message": "Content-Type must be application/json"
-                    }
-                }, status=400)
-            
-            # Parse JSON for POST requests
+            # Parse JSON for POST requests (be permissive with Content-Type for scanners)
             try:
                 data = await request.json()
             except Exception as json_error:
