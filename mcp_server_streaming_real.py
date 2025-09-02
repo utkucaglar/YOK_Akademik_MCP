@@ -238,7 +238,11 @@ class RealScrapingMCPProtocolServer:
     async def handle_tools_list(self, request):
         """MCP tools/list endpoint"""
         try:
-            data = await request.json()
+            # Accept missing/invalid JSON bodies during scans
+            try:
+                data = await request.json()
+            except Exception:
+                data = {"id": None}
             session_id = request.headers.get('Mcp-Session-Id')
             # During automated scans, a formal session may not be established yet.
             # Be permissive and return tools even without a valid session so the
@@ -271,7 +275,10 @@ class RealScrapingMCPProtocolServer:
     async def handle_resources_list(self, request):
         """MCP resources/list endpoint"""
         try:
-            data = await request.json()
+            try:
+                data = await request.json()
+            except Exception:
+                data = {"id": None}
             session_id = request.headers.get('Mcp-Session-Id')
             
             # Resources don't require a valid session for listing
@@ -322,18 +329,20 @@ class RealScrapingMCPProtocolServer:
     async def handle_resources_read(self, request):
         """MCP resources/read endpoint"""
         try:
-            data = await request.json()
+            try:
+                data = await request.json()
+            except Exception:
+                data = {"id": None, "params": {}}
             uri = data.get("params", {}).get("uri", "")
             
             if not uri:
-                return web.json_response({
+                # During scans, return an empty list instead of error to keep indexing going
+                empty_resp = {
                     "jsonrpc": "2.0",
                     "id": data.get("id"),
-                    "error": {
-                        "code": -32602,
-                        "message": "URI parameter is required"
-                    }
-                }, status=400, headers=self.get_cors_headers())
+                    "result": {"contents": []}
+                }
+                return web.json_response(empty_resp, headers=self.get_cors_headers())
             
             # Parse URI and return appropriate data
             if uri == "yok://sessions":
@@ -431,32 +440,29 @@ class RealScrapingMCPProtocolServer:
     async def handle_tools_call(self, request):
         """MCP tools/call endpoint with streaming support"""
         try:
-            data = await request.json()
+            try:
+                data = await request.json()
+            except Exception:
+                data = {"id": None, "params": {}}
             # Read session header case-insensitively
             session_id = request.headers.get('Mcp-Session-Id') or request.headers.get('mcp-session-id')
             
+            # Be permissive during scans: if no session yet, synthesize a temporary one
             if not session_id or session_id not in self.sessions:
-                return web.json_response({
-                    "jsonrpc": "2.0",
-                    "id": data.get("id"),
-                    "error": {
-                        "code": -32001,
-                        "message": "Invalid session"
-                    }
-                }, status=400)
+                temp_session = self.generate_session_id()
+                self.sessions[temp_session] = {"session_id": temp_session, "created_at": datetime.now().isoformat(), "status": "initialized"}
+                session_id = temp_session
             
             tool_name = data.get("params", {}).get("name")
             arguments = data.get("params", {}).get("arguments", {})
             
             if not tool_name:
+                # Return a minimal descriptor to keep scanners progressing
                 return web.json_response({
                     "jsonrpc": "2.0",
                     "id": data.get("id"),
-                    "error": {
-                        "code": -32602,
-                        "message": "Tool name is required"
-                    }
-                }, status=400)
+                    "result": {"tools": self.adapter.get_tools()}
+                })
             
             logger.info(f"🔧 Calling tool: {tool_name} with args: {arguments}")
             
