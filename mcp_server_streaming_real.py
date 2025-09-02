@@ -75,6 +75,23 @@ async def request_logging_middleware(request, handler):
         )
     except Exception:
         pass
+    # Store minimal request history for environments without external logs
+    try:
+        request.app['request_history'] = request.app.get('request_history', [])
+        request.app['request_history'].append({
+            'ts': datetime.now().isoformat(),
+            'method': request.method,
+            'path': request.path,
+            'accept': request.headers.get('Accept',''),
+            'content_type': request.headers.get('Content-Type',''),
+            'session': request.headers.get('Mcp-Session-Id') or request.headers.get('mcp-session-id') or ''
+        })
+        # Keep last 200 entries
+        if len(request.app['request_history']) > 200:
+            request.app['request_history'] = request.app['request_history'][-200:]
+    except Exception:
+        pass
+
     response = await handler(request)
     try:
         logger.info(
@@ -1721,6 +1738,7 @@ def create_app():
     middlewares.append(request_logging_middleware)
     
     app = web.Application(middlewares=middlewares)
+    app['request_history'] = []
     mcp_server = RealScrapingMCPProtocolServer()
     
     # MCP Protocol endpoints - Single endpoint for all methods (MCP 2025-03-26)
@@ -1861,6 +1879,40 @@ def create_app():
         return web.json_response(payload)
     
     app.router.add_get("/.well-known/mcp.json", well_known_mcp_handler)
+
+    # Debug: recent requests
+    async def debug_requests_handler(request):
+        return web.json_response({
+            "recent": app.get('request_history', [])
+        })
+    app.router.add_get("/debug/requests", debug_requests_handler)
+
+    # Self-check: call key endpoints internally and report
+    async def debug_report_handler(request):
+        base = f"http://{SERVER_HOST}:{SERVER_PORT}"
+        report = {"base": base, "checks": []}
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async def check(method, path, **kwargs):
+                url = base + path
+                try:
+                    async with session.request(method, url, **kwargs) as resp:
+                        ct = resp.headers.get('Content-Type','')
+                        txt = await resp.text()
+                        report["checks"].append({"method": method, "path": path, "status": resp.status, "contentType": ct, "bodySample": txt[:300]})
+                except Exception as e:
+                    report["checks"].append({"method": method, "path": path, "error": str(e)})
+        
+            await check('GET', '/.well-known/mcp.json')
+            await check('GET', '/mcp')
+            await check('POST', '/mcp', json={
+                "jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"clientInfo":{"name":"self-check","version":"1.0"}}
+            })
+            await check('POST', '/mcp', json={"jsonrpc":"2.0","id":2,"method":"tools/list"})
+            await check('GET', '/ready')
+            await check('GET', '/health')
+        return web.json_response(report)
+    app.router.add_get("/debug/report", debug_report_handler)
     
     return app
 
