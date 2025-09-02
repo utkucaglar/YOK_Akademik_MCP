@@ -67,40 +67,6 @@ else:
 
 logger = logging.getLogger(__name__)
 
-@web.middleware
-async def request_logging_middleware(request, handler):
-    try:
-        logger.info(
-            f"➡️  {request.method} {request.path} | Accept={request.headers.get('Accept','')} | Content-Type={request.headers.get('Content-Type','')} | Session={request.headers.get('Mcp-Session-Id') or request.headers.get('mcp-session-id') or ''}"
-        )
-    except Exception:
-        pass
-    # Store minimal request history for environments without external logs
-    try:
-        request.app['request_history'] = request.app.get('request_history', [])
-        request.app['request_history'].append({
-            'ts': datetime.now().isoformat(),
-            'method': request.method,
-            'path': request.path,
-            'accept': request.headers.get('Accept',''),
-            'content_type': request.headers.get('Content-Type',''),
-            'session': request.headers.get('Mcp-Session-Id') or request.headers.get('mcp-session-id') or ''
-        })
-        # Keep last 200 entries
-        if len(request.app['request_history']) > 200:
-            request.app['request_history'] = request.app['request_history'][-200:]
-    except Exception:
-        pass
-
-    response = await handler(request)
-    try:
-        logger.info(
-            f"⬅️  {request.method} {request.path} -> {response.status} | Content-Type={response.headers.get('Content-Type','')}"
-        )
-    except Exception:
-        pass
-    return response
-
 class RealScrapingMCPProtocolServer:
     """
     Enhanced MCP Server with real-time streaming during actual scraping
@@ -272,15 +238,18 @@ class RealScrapingMCPProtocolServer:
     async def handle_tools_list(self, request):
         """MCP tools/list endpoint"""
         try:
-            # Accept missing/invalid JSON bodies during scans
-            try:
-                data = await request.json()
-            except Exception:
-                data = {"id": None}
+            data = await request.json()
             session_id = request.headers.get('Mcp-Session-Id')
-            # During automated scans, a formal session may not be established yet.
-            # Be permissive and return tools even without a valid session so the
-            # scanner can index capabilities.
+            
+            if not session_id or session_id not in self.sessions:
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": data.get("id"),
+                    "error": {
+                        "code": -32001,
+                        "message": "Invalid session"
+                    }
+                }, status=400)
             
             tools = self.adapter.get_tools()
             
@@ -309,10 +278,7 @@ class RealScrapingMCPProtocolServer:
     async def handle_resources_list(self, request):
         """MCP resources/list endpoint"""
         try:
-            try:
-                data = await request.json()
-            except Exception:
-                data = {"id": None}
+            data = await request.json()
             session_id = request.headers.get('Mcp-Session-Id')
             
             # Resources don't require a valid session for listing
@@ -363,20 +329,18 @@ class RealScrapingMCPProtocolServer:
     async def handle_resources_read(self, request):
         """MCP resources/read endpoint"""
         try:
-            try:
-                data = await request.json()
-            except Exception:
-                data = {"id": None, "params": {}}
+            data = await request.json()
             uri = data.get("params", {}).get("uri", "")
             
             if not uri:
-                # During scans, return an empty list instead of error to keep indexing going
-                empty_resp = {
+                return web.json_response({
                     "jsonrpc": "2.0",
                     "id": data.get("id"),
-                    "result": {"contents": []}
-                }
-                return web.json_response(empty_resp, headers=self.get_cors_headers())
+                    "error": {
+                        "code": -32602,
+                        "message": "URI parameter is required"
+                    }
+                }, status=400, headers=self.get_cors_headers())
             
             # Parse URI and return appropriate data
             if uri == "yok://sessions":
@@ -474,29 +438,31 @@ class RealScrapingMCPProtocolServer:
     async def handle_tools_call(self, request):
         """MCP tools/call endpoint with streaming support"""
         try:
-            try:
-                data = await request.json()
-            except Exception:
-                data = {"id": None, "params": {}}
-            # Read session header case-insensitively
-            session_id = request.headers.get('Mcp-Session-Id') or request.headers.get('mcp-session-id')
+            data = await request.json()
+            session_id = request.headers.get('mcp-session-id')
             
-            # Be permissive during scans: if no session yet, synthesize a temporary one
             if not session_id or session_id not in self.sessions:
-                temp_session = self.generate_session_id()
-                self.sessions[temp_session] = {"session_id": temp_session, "created_at": datetime.now().isoformat(), "status": "initialized"}
-                session_id = temp_session
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": data.get("id"),
+                    "error": {
+                        "code": -32001,
+                        "message": "Invalid session"
+                    }
+                }, status=400)
             
             tool_name = data.get("params", {}).get("name")
             arguments = data.get("params", {}).get("arguments", {})
             
             if not tool_name:
-                # Return a minimal descriptor to keep scanners progressing
                 return web.json_response({
                     "jsonrpc": "2.0",
                     "id": data.get("id"),
-                    "result": {"tools": self.adapter.get_tools()}
-                })
+                    "error": {
+                        "code": -32602,
+                        "message": "Tool name is required"
+                    }
+                }, status=400)
             
             logger.info(f"🔧 Calling tool: {tool_name} with args: {arguments}")
             
@@ -1174,23 +1140,9 @@ class RealScrapingMCPProtocolServer:
         """Main MCP request handler - MCP 2025-03-26 Streamable HTTP"""
         data = {}
         try:
-            # Handle GET requests: if client requests SSE, stream; otherwise return JSON descriptor
+            # Handle GET requests for SSE stream
             if request.method == "GET":
-                accept_header = request.headers.get('Accept', '')
-                if 'text/event-stream' in accept_header:
-                    return await self.handle_sse_stream(request)
-                # Return a JSON-RPC-shaped descriptor to improve compatibility with scanners
-                desc = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {"tools": {"listChanged": True}, "logging": {}, "resources": {}, "prompts": {}},
-                        "serverInfo": {"name": "YOK Academic MCP Real Scraping Server", "version": "3.0.0"},
-                        "endpoints": {"mcp": "/mcp", "health": "/health", "ready": "/ready"}
-                    }
-                }
-                return web.json_response(desc, headers=self.get_cors_headers())
+                return await self.handle_sse_stream(request)
             
             # Handle DELETE requests for session termination
             if request.method == "DELETE":
@@ -1200,22 +1152,31 @@ class RealScrapingMCPProtocolServer:
             if request.method == "OPTIONS":
                 return await self.handle_options(request)
             
-            # Parse JSON for POST requests (be permissive with Content-Type for scanners)
+            # Validate Content-Type for POST requests
+            content_type = request.headers.get('Content-Type', '')
+            if request.method == "POST" and not content_type.startswith('application/json'):
+                return web.json_response({
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32700,
+                        "message": "Content-Type must be application/json"
+                    }
+                }, status=400)
+            
+            # Parse JSON for POST requests
             try:
                 data = await request.json()
             except Exception as json_error:
                 logger.error(f"JSON parse error: {json_error}")
-                # Be permissive for scanners: return a descriptor instead of 400
-                desc = {
+                return web.json_response({
                     "jsonrpc": "2.0",
                     "id": None,
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {"tools": {"listChanged": True}, "logging": {}, "resources": {}, "prompts": {}},
-                        "serverInfo": {"name": "YOK Academic MCP Real Scraping Server", "version": "3.0.0"}
+                    "error": {
+                        "code": -32700,
+                        "message": f"Parse error: {str(json_error)}"
                     }
-                }
-                return web.json_response(desc, headers={
+                }, status=400, headers={
                     'Access-Control-Allow-Origin': '*',
                     'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id',
                     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE'
@@ -1734,11 +1695,8 @@ def create_app():
     middlewares = []
     if CORS_ENABLED:
         middlewares.append(cors_middleware)
-    # Always include request logger to aid discovery troubleshooting
-    middlewares.append(request_logging_middleware)
     
     app = web.Application(middlewares=middlewares)
-    app['request_history'] = []
     mcp_server = RealScrapingMCPProtocolServer()
     
     # MCP Protocol endpoints - Single endpoint for all methods (MCP 2025-03-26)
@@ -1865,54 +1823,6 @@ def create_app():
         })
     
     app.router.add_get("/metrics", metrics_handler)
-    
-    # Well-known MCP metadata for discovery
-    async def well_known_mcp_handler(request):
-        payload = {
-            "protocolVersion": "2024-11-05",
-            "transport": "streamable-http",
-            "endpoint": "/mcp",
-            "capabilities": ["tools", "logging", "resources", "prompts"],
-            "serverInfo": {"name": "YOK Academic MCP Real Scraping Server", "version": "3.0.0"},
-            "health": "/health"
-        }
-        return web.json_response(payload)
-    
-    app.router.add_get("/.well-known/mcp.json", well_known_mcp_handler)
-
-    # Debug: recent requests
-    async def debug_requests_handler(request):
-        return web.json_response({
-            "recent": app.get('request_history', [])
-        })
-    app.router.add_get("/debug/requests", debug_requests_handler)
-
-    # Self-check: call key endpoints internally and report
-    async def debug_report_handler(request):
-        base = f"http://{SERVER_HOST}:{SERVER_PORT}"
-        report = {"base": base, "checks": []}
-        import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async def check(method, path, **kwargs):
-                url = base + path
-                try:
-                    async with session.request(method, url, **kwargs) as resp:
-                        ct = resp.headers.get('Content-Type','')
-                        txt = await resp.text()
-                        report["checks"].append({"method": method, "path": path, "status": resp.status, "contentType": ct, "bodySample": txt[:300]})
-                except Exception as e:
-                    report["checks"].append({"method": method, "path": path, "error": str(e)})
-        
-            await check('GET', '/.well-known/mcp.json')
-            await check('GET', '/mcp')
-            await check('POST', '/mcp', json={
-                "jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"clientInfo":{"name":"self-check","version":"1.0"}}
-            })
-            await check('POST', '/mcp', json={"jsonrpc":"2.0","id":2,"method":"tools/list"})
-            await check('GET', '/ready')
-            await check('GET', '/health')
-        return web.json_response(report)
-    app.router.add_get("/debug/report", debug_report_handler)
     
     return app
 
