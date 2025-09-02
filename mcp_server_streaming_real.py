@@ -432,7 +432,8 @@ class RealScrapingMCPProtocolServer:
         """MCP tools/call endpoint with streaming support"""
         try:
             data = await request.json()
-            session_id = request.headers.get('mcp-session-id')
+            # Read session header case-insensitively
+            session_id = request.headers.get('Mcp-Session-Id') or request.headers.get('mcp-session-id')
             
             if not session_id or session_id not in self.sessions:
                 return web.json_response({
@@ -1162,14 +1163,17 @@ class RealScrapingMCPProtocolServer:
                 data = await request.json()
             except Exception as json_error:
                 logger.error(f"JSON parse error: {json_error}")
-                return web.json_response({
+                # Be permissive for scanners: return a descriptor instead of 400
+                desc = {
                     "jsonrpc": "2.0",
                     "id": None,
-                    "error": {
-                        "code": -32700,
-                        "message": f"Parse error: {str(json_error)}"
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {"listChanged": True}, "logging": {}, "resources": {}, "prompts": {}},
+                        "serverInfo": {"name": "YOK Academic MCP Real Scraping Server", "version": "3.0.0"}
                     }
-                }, status=400, headers={
+                }
+                return web.json_response(desc, headers={
                     'Access-Control-Allow-Origin': '*',
                     'Access-Control-Allow-Headers': 'Content-Type, Mcp-Session-Id',
                     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE'
